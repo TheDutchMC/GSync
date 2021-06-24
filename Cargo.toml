@@ -1,0 +1,17 @@
+[package]
+name = "syncer"
+version = "0.1.0"
+authors = ["Tobias de Bruijn <t.debruijn@array21.dev>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+serde = { version = "1.0.126", features = ["derive"]}
+serde_json = "1.0.64"
+reqwest = { version = "0.11.4", features = ["json"]}
+tokio = { version = "1.7.1", features = ["full"]}
+rusqlite = { version = "0.25.3", features = ["bundled"]}
+clap = "2.33.3"
+cfg-if = "1.0.0"
+actix-web = "3.3.2"
