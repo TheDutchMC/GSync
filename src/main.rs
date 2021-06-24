@@ -1,30 +1,12 @@
 
 mod api;
 mod env;
+mod config;
+mod login;
 
 use clap::Arg;
 use crate::env::Env;
-use rusqlite::named_params;
-
-struct Configuration {
-    client_id:      Option<String>,
-    client_secret:  Option<String>,
-    input_files:    Option<String>
-}
-
-impl Configuration {
-    fn is_valid(&self) -> (bool, &str) {
-        if self.client_id.is_none() {
-            (false, "'client_id' is empty")
-        } else if self.client_secret.is_none() {
-            (false, "'client_secret' is empty")
-        } else if self.input_files.is_none() {
-            (false, "'input_files' is empty")
-        } else {
-            (true, "")
-        }
-    }
-}
+use crate::config::Configuration;
 
 fn main() {
     let matches = clap::App::new("Syncer")
@@ -56,16 +38,21 @@ fn main() {
                 .required(false)))
         .subcommand(clap::SubCommand::with_name("show")
             .about("Show the current Syncer configuration"))
+        .subcommand(clap::SubCommand::with_name("login")
+            .about("Login to Google"))
+        .subcommand(clap::SubCommand::with_name("sync")
+            .about("Start syncing the configured folders to Google Drive"))
         .get_matches();
 
     let empty_env = Env::empty();
 
     //Check if there are tables
     let conn = empty_env.get_conn().expect("Failed to create database connection. ");
-    conn.execute("CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, refresh_token TEXT)", named_params! {}).expect("Failed to create table 'users'");
-    conn.execute("CREATE TABLE IF NOT EXISTS config (client_id TEXT, client_secret TEXT, input_files TEXT)", named_params! {}).expect("Failed to create table 'config'");
-    conn.execute("CREATE TABLE IF NOT EXISTS files (id TEXT PRIMARY KEY, path TEXT, hash TEXT)", named_params! {}).expect("Failed to create table 'files'");
+    conn.execute("CREATE TABLE IF NOT EXISTS user (id TEXT PRIMARY KEY, refresh_token TEXT, access_token TEXT, expires_in INTEGER)", rusqlite::named_params! {}).expect("Failed to create table 'users'");
+    conn.execute("CREATE TABLE IF NOT EXISTS config (client_id TEXT, client_secret TEXT, input_files TEXT)", rusqlite::named_params! {}).expect("Failed to create table 'config'");
+    conn.execute("CREATE TABLE IF NOT EXISTS files (id TEXT PRIMARY KEY, path TEXT, hash TEXT)", rusqlite::named_params! {}).expect("Failed to create table 'files'");
 
+    // 'config' subcommand
     if let Some(matches) = matches.subcommand_matches("config") {
         let new_config = Configuration {
             client_id: option_str_string(matches.value_of("client-id")),
@@ -73,101 +60,131 @@ fn main() {
             input_files: option_str_string(matches.value_of("files"))
         };
 
-        let mut stmt = conn.prepare("SELECT * FROM config").unwrap();
-        let mut result = stmt.query(named_params! {}).expect("Failed to query config table");
-
-        let config = match result.next() {
-            Ok(Some(row)) => {
-                let client_id = row.get::<&str, Option<String>>("client_id").unwrap();
-                let client_secret = row.get::<&str, Option<String>>("client_secret").unwrap();
-                let input_files = row.get::<&str, Option<String>>("input_files").unwrap();
-
-                let client_id = match new_config.client_id {
-                    Some(c) => Some(c),
-                    None => client_id
-                };
-
-                let client_secret = match new_config.client_secret {
-                    Some(c) => Some(c),
-                    None => client_secret
-                };
-
-                let input_files = match new_config.input_files {
-                    Some(c) => Some(c),
-                    None => input_files
-                };
-
-                Configuration {
-                    client_id,
-                    client_secret,
-                    input_files
-                }
-            },
-            Ok(None) => new_config,
-            Err(e) => panic!("{:?}", e)
+        let current_config = match Configuration::get_config(&empty_env) {
+            Ok(cc) => cc,
+            Err(e) => {
+                eprintln!("Error: Failed to query current configuration: {:?}", e);
+                std::process::exit(1);
+            }
         };
 
-        match config.is_valid() {
-            (false, c) => {
-                eprintln!("Configuration is incomplete: {}", c);
+        let config = Configuration::merge(new_config, current_config);
+        println!("{:?}", &config);
+        match config.is_complete() {
+            (true, _) => {},
+            (false, str) => {
+                eprintln!("Error: Configuration is incomplete; {}", str);
                 std::process::exit(1);
-            },
-            _ => {}
+            }
         }
 
-        conn.execute("INSERT INTO config (client_id, client_secret, input_files) VALUES (:client_id, :client_secret, :input_files)", named_params! {
-            ":client_id": &config.client_id,
-            ":client_secret": &config.client_secret,
-            ":input_files": &config.input_files
-        }).expect("Failed to update table 'config'");
+        match config.write(&empty_env) {
+            Ok(_) => {},
+            Err(e) => {
+                eprintln!("Error: Failed to write new configuration: {:?}", e);
+                std::process::exit(1);
+            }
+        };
 
         println!("Configuration updated!");
         std::process::exit(0);
     }
 
-    let config = {
-        let mut stmt = conn.prepare("SELECT * FROM config").unwrap();
-        let mut result = stmt.query(named_params! {}).expect("Failed to query config table");
-
-        let mut config = None;
-        while let Ok(Some(row)) = result.next() {
-            let client_id = row.get::<&str, Option<String>>("client_id").unwrap();
-            let client_secret = row.get::<&str, Option<String>>("client_secret").unwrap();
-            let input_files = row.get::<&str, Option<String>>("input_files").unwrap();
-
-            config = Some(Configuration {
-                client_id,
-                client_secret,
-                input_files
-            })
-        }
-
-        config.unwrap()
-    };
-
+    // 'show' subcommand
     if let Some(_) = matches.subcommand_matches("show") {
-        let mut stmt = conn.prepare("SELECT * FROM config").unwrap();
-        let mut result = stmt.query(named_params! {}).expect("Failed to query config table");
+        let config = match Configuration::get_config(&empty_env) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("Error: Failed to query configuration: {:?}", e);
+                std::process::exit(1);
+            }
+        };
 
-        while let Ok(Some(row)) = result.next() {
-            let client_id = option_unwrap_text(row.get::<&str, Option<String>>("client_id").unwrap());
-            let client_secret = option_unwrap_text(row.get::<&str, Option<String>>("client_secret").unwrap());
-            let input_files = option_unwrap_text(row.get::<&str, Option<String>>("input_files").unwrap());
-
-            println!("Current Syncer configuration:");
-            println!("Client ID: {}", client_id);
-            println!("Client Secret: {}", client_secret);
-            println!("Input Files: {}", input_files);
+        if config.is_empty() {
+            println!("Syncer is unconfigured. Run 'syncer config -h` for more information on how to configure Syncer'");
             std::process::exit(0);
         }
 
-        println!("Syncer is unconfigured. Run 'syncer config -h` for more information on how to configure Syncer'");
+        println!("Current Syncer configuration:");
+        println!("Client ID: {}", option_unwrap_text(config.client_id));
+        println!("Client Secret: {}", option_unwrap_text(config.client_secret));
+        println!("Input Files: {}", option_unwrap_text(config.input_files));
         std::process::exit(0);
     }
 
-    let _env = Env::new(config.client_id.as_ref().unwrap(), config.client_secret.as_ref().unwrap());
+    // 'login' subcommand
+    if let Some(_) = matches.subcommand_matches("login") {
+        let config = match Configuration::get_config(&empty_env) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("Error: Failed to query configuration: {:?}", e);
+                std::process::exit(1);
+            }
+        };
 
+        if config.is_empty() {
+            println!("Syncer is unconfigured. Run 'syncer config -h` for more information on how to configure Syncer'");
+            std::process::exit(0);
+        }
 
+        match config.is_complete() {
+            (true, _) => {},
+            (false, str) => {
+                eprintln!("Error: Configuration is incomplete; {}", str);
+                std::process::exit(1);
+            }
+        }
+
+        let env = Env::new(config.client_id.as_ref().unwrap(), config.client_secret.as_ref().unwrap());
+        let login_data = match crate::login::perform_oauth2_login(&env) {
+            Ok(ld) => ld,
+            Err(e) => {
+                eprintln!("Error: OAuth2 Login Flow failed: {}", e);
+                std::process::exit(1);
+            }
+        };
+
+        println!("Info: Inserting tokens into database.");
+
+        match crate::login::db::UserLogin::save_to_database(&login_data.access_token, login_data.expires_in, &login_data.refresh_token, &env) {
+            Ok(_) => {},
+            Err(e) => {
+                eprintln!("Error: Failed to insert login credentials into database: {}", e);
+                std::process::exit(1);
+            }
+        }
+
+        println!("Info: Login successful!");
+        std::process::exit(0);
+    }
+
+    // 'sync' subcommand
+    if let Some(_) = matches.subcommand_matches("sync") {
+        let config = match Configuration::get_config(&empty_env) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("Error: Failed to query configuration: {:?}", e);
+                std::process::exit(1);
+            }
+        };
+
+        if config.is_empty() {
+            println!("Syncer is unconfigured. Run 'syncer config -h` for more information on how to configure Syncer'");
+            std::process::exit(0);
+        }
+
+        match config.is_complete() {
+            (true, _) => {},
+            (false, str) => {
+                eprintln!("Error: Configuration is incomplete; {}", str);
+                std::process::exit(1);
+            }
+        }
+
+        let _env = Env::new(config.client_id.as_ref().unwrap(), config.client_secret.as_ref().unwrap());
+    }
+
+    println!("No command specified. Run 'syncer -h' for available commands.");
 }
 
 fn option_str_string(i: Option<&str>) -> Option<String> {

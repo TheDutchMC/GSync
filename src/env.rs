@@ -2,9 +2,9 @@ use cfg_if::cfg_if;
 
 #[derive(Debug, Clone)]
 pub struct Env {
-    db:             String,
-    client_id:      String,
-    client_secret:  String
+    pub db:             String,
+    pub client_id:      String,
+    pub client_secret:  String
 }
 
 #[cfg(unix)]
@@ -55,7 +55,7 @@ cfg_if! {
         }
     } else if #[cfg(windows)] {
         fn get_db_path() -> String {
-            DB_PATH.replace("%appdata%", &std::env::var("%appdata%").unwrap())
+            DB_PATH.replace("%appdata%", &std::env::var("appdata").unwrap())
         }
     } else {
         fn get_db_path() -> String {

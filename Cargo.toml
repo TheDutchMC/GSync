@@ -9,9 +9,16 @@ edition = "2018"
 [dependencies]
 serde = { version = "1.0.126", features = ["derive"]}
 serde_json = "1.0.64"
-reqwest = { version = "0.11.4", features = ["json"]}
+serde_qs = "0.8.3"
+reqwest = { version = "0.11.4", features = ["json", "blocking"]}
 tokio = { version = "1.7.1", features = ["full"]}
 rusqlite = { version = "0.25.3", features = ["bundled"]}
 clap = "2.33.3"
 cfg-if = "1.0.0"
+actix = "0.4"
 actix-web = "3.3.2"
+actix-server = "1.0.4"
+rand = "0.8.4"
+base64 = "0.13.0"
+lazy_static = "1.4.0"
+sha2 = "0.9.5"
