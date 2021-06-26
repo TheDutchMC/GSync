@@ -3,6 +3,7 @@ mod api;
 mod env;
 mod config;
 mod login;
+mod macros;
 
 use clap::Arg;
 use crate::env::Env;
@@ -46,11 +47,14 @@ fn main() {
 
     let empty_env = Env::empty();
 
-    //Check if there are tables
-    let conn = empty_env.get_conn().expect("Failed to create database connection. ");
-    conn.execute("CREATE TABLE IF NOT EXISTS user (id TEXT PRIMARY KEY, refresh_token TEXT, access_token TEXT, expires_in INTEGER)", rusqlite::named_params! {}).expect("Failed to create table 'users'");
-    conn.execute("CREATE TABLE IF NOT EXISTS config (client_id TEXT, client_secret TEXT, input_files TEXT)", rusqlite::named_params! {}).expect("Failed to create table 'config'");
-    conn.execute("CREATE TABLE IF NOT EXISTS files (id TEXT PRIMARY KEY, path TEXT, hash TEXT)", rusqlite::named_params! {}).expect("Failed to create table 'files'");
+    // Scoping this seperately because we want to drop conn when we're done, since we can only ever have 1 conn.
+    {
+        //Check if there are tables
+        let conn = empty_env.get_conn().expect("Failed to create database connection. ");
+        conn.execute("CREATE TABLE IF NOT EXISTS user (id TEXT PRIMARY KEY, refresh_token TEXT, access_token TEXT, expiry INTEGER)", rusqlite::named_params! {}).expect("Failed to create table 'users'");
+        conn.execute("CREATE TABLE IF NOT EXISTS config (client_id TEXT, client_secret TEXT, input_files TEXT)", rusqlite::named_params! {}).expect("Failed to create table 'config'");
+        conn.execute("CREATE TABLE IF NOT EXISTS files (id TEXT PRIMARY KEY, path TEXT, hash TEXT)", rusqlite::named_params! {}).expect("Failed to create table 'files'");
+    }
 
     // 'config' subcommand
     if let Some(matches) = matches.subcommand_matches("config") {
@@ -146,7 +150,7 @@ fn main() {
 
         println!("Info: Inserting tokens into database.");
 
-        match crate::login::db::UserLogin::save_to_database(&login_data.access_token, login_data.expires_in, &login_data.refresh_token, &env) {
+        match crate::login::db::UserLogin::save_to_database(&login_data, &env) {
             Ok(_) => {},
             Err(e) => {
                 eprintln!("Error: Failed to insert login credentials into database: {}", e);
@@ -181,7 +185,13 @@ fn main() {
             }
         }
 
-        let _env = Env::new(config.client_id.as_ref().unwrap(), config.client_secret.as_ref().unwrap());
+        let env = Env::new(config.client_id.as_ref().unwrap(), config.client_secret.as_ref().unwrap());
+        let access_token = crate::api::oauth::get_access_token(&env).unwrap();
+        let folder_id = crate::api::drive::create_folder(&access_token, "testfolder", "root").unwrap();
+
+        let path = std::path::Path::new("/mnt/c/Users/Tobias de Bruijn/Downloads/Spinner-1s-200px.gif");
+        let file_id = crate::api::drive::upload_file(&access_token, path, &folder_id).unwrap();
+        println!("{}", file_id);
     }
 
     println!("No command specified. Run 'syncer -h' for available commands.");

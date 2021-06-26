@@ -1,5 +1,6 @@
 use crate::env::Env;
 use rusqlite::named_params;
+use crate::unwrap_str;
 
 #[derive(Debug)]
 pub struct Configuration {
@@ -55,10 +56,7 @@ impl Configuration {
     }
 
     pub fn get_config(env: &Env) -> Result<Self, String> {
-        let conn = match env.get_conn() {
-            Ok(c) => c,
-            Err(e) => return Err(e.to_string())
-        };
+        let conn = unwrap_str!(env.get_conn());
 
         let mut stmt = conn.prepare("SELECT * FROM config").unwrap();
         let mut result = stmt.query(named_params! {}).expect("Failed to query config table");
@@ -77,24 +75,20 @@ impl Configuration {
     }
 
     pub fn write(&self, env: &Env) -> Result<(), String> {
-        let conn = match env.get_conn() {
-            Ok(c) => c,
-            Err(e) => return Err(e.to_string())
-        };
+        let conn = unwrap_str!(env.get_conn());
 
         match conn.execute("DELETE FROM config", named_params! {}) {
             Ok(_) => {},
             Err(e) => return Err(e.to_string())
         }
 
-        match conn.execute("INSERT INTO config (client_id, client_secret, input_files) VALUES (:client_id, :client_secret, :input_files)", named_params! {
+        unwrap_str!(conn.execute("INSERT INTO config (client_id, client_secret, input_files) VALUES (:client_id, :client_secret, :input_files)", named_params! {
             ":client_id": &self.client_id,
             ":client_secret": &self.client_secret,
             ":input_files": &self.input_files
-        }) {
-            Ok(_) => Ok(()),
-            Err(e) => Err(e.to_string())
-        }
+        }));
+
+        Ok(())
     }
 }
 

@@ -6,41 +6,7 @@ use crate::env::Env;
 use actix_web::{HttpServer, App};
 use rand::Rng;
 use std::sync::mpsc::{Sender, channel};
-use serde::{Deserialize, Serialize};
-
-pub struct LoginData {
-    pub refresh_token:  String,
-    pub access_token:   String,
-    pub expires_in:     i64
-}
-
-#[derive(Serialize)]
-struct AuthRequest<'a> {
-    client_id:              &'a str,
-    redirect_uri:           &'a str,
-    response_type:          &'static str,
-    scope:                  &'static str,
-    code_challenge:         &'a str,
-    code_challenge_method:  &'static str,
-    state:                  &'a str,
-}
-
-#[derive(Serialize)]
-struct ExchangeRequest<'a> {
-    client_id:          &'a str,
-    client_secret:      &'a str,
-    code:               String,
-    code_verifier:      String,
-    grant_type:         &'static str,
-    redirect_uri:       &'a str
-}
-
-#[derive(Deserialize)]
-struct ExchangeResponse {
-    access_token:   String,
-    expires_in:     i64,
-    refresh_token:  String,
-}
+use crate::api::oauth::LoginData;
 
 #[derive(Clone, Debug)]
 pub struct ActixData {
@@ -77,21 +43,10 @@ pub fn perform_oauth2_login(env: &Env) -> Result<LoginData, String> {
     });
     let server = rx_srv.recv().unwrap();
 
-    //Create the query string and URI
-    let auth_request = AuthRequest {
-        client_id:              &env.client_id,
-        redirect_uri:           &format!("http://localhost:{}", port),
-        response_type:          "code",
-        scope:                  "https://www.googleapis.com/auth/drive",
-        code_challenge:         &code_challenge,
-        code_challenge_method:  "S256",
-        state:                  &state
-    };
-    let qstring = serde_qs::to_string(&auth_request).unwrap();
-    let uri = format!("https://accounts.google.com/o/oauth2/v2/auth?{}", qstring);
+    let auth_uri = crate::api::oauth::create_authentication_uri(&env, &code_challenge, &state, &format!("http://localhost:{}", port));
 
     println!("Info: Please open the following URL:");
-    println!("\n{}\n", uri);
+    println!("\n{}\n", auth_uri);
 
     //Wait for the code from the HTTP endpoint
     let code = rx_code.recv().unwrap();
@@ -101,35 +56,7 @@ pub fn perform_oauth2_login(env: &Env) -> Result<LoginData, String> {
     //Stop the Actix web server, we dont need it anymore
     actix_web::rt::System::new("").block_on(server.stop(true));
 
-    //We can now exchange this token for a refresh_token and the likes
-    let exchange_request = ExchangeRequest {
-        client_id:      &env.client_id,
-        client_secret:  &env.client_secret,
-        code,
-        code_verifier,
-        grant_type:     "authorization_code",
-        redirect_uri:   &format!("http://localhost:{}", port)
-    };
-
-    // Send a request to Google to exchange the code for the necessary codes
-    let response = match reqwest::blocking::Client::new().post("https://oauth2.googleapis.com/token")
-        .body(serde_json::to_string(&exchange_request).unwrap())
-        .send() {
-        Ok(r) => r,
-        Err(e) => return Err(e.to_string())
-    };
-
-    // Deserialize from JSON
-    let exchange_response: ExchangeResponse = match response.json() {
-        Ok(er) => er,
-        Err(e) => return Err(e.to_string())
-    };
-
-    Ok(LoginData {
-        access_token: exchange_response.access_token,
-        refresh_token: exchange_response.refresh_token,
-        expires_in: exchange_response.expires_in
-    })
+    crate::api::oauth::exchange_access_token(&env, &code, &code_verifier, &format!("http://localhost:{}", port))
 }
 
 /// Start the Actix Web Server.
