@@ -23,6 +23,6 @@ pub struct ErrorData {
     domain:         String,
     reason:         String,
     message:        String,
-    location_type:  String,
-    location:       String
+    location_type:  Option<String>,
+    location:       Option<String>
 }

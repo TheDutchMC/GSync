@@ -4,6 +4,7 @@ mod env;
 mod config;
 mod login;
 mod macros;
+mod sync;
 
 use clap::Arg;
 use crate::env::Env;
@@ -47,6 +48,13 @@ fn main() {
                 .value_name("FILES")
                 .help("The files you want to sync, comma seperated String")
                 .takes_value(true)
+                .required(false))
+            .arg(Arg::with_name("drive_id")
+                .short("d")
+                .long("drive")
+                .value_name("ID")
+                .help("The ID of the Team Drive to use, if you are not using a Team Drive leave this empty.")
+                .takes_value(true)
                 .required(false)))
         .subcommand(clap::SubCommand::with_name("show")
             .about("Show the current Syncer configuration"))
@@ -63,22 +71,22 @@ fn main() {
         //Check if there are tables
         let conn = empty_env.get_conn().expect("Failed to create database connection. ");
         conn.execute("CREATE TABLE IF NOT EXISTS user (id TEXT PRIMARY KEY, refresh_token TEXT, access_token TEXT, expiry INTEGER)", rusqlite::named_params! {}).expect("Failed to create table 'users'");
-        conn.execute("CREATE TABLE IF NOT EXISTS config (client_id TEXT, client_secret TEXT, input_files TEXT)", rusqlite::named_params! {}).expect("Failed to create table 'config'");
+        conn.execute("CREATE TABLE IF NOT EXISTS config (client_id TEXT, client_secret TEXT, input_files TEXT, drive_id TEXT)", rusqlite::named_params! {}).expect("Failed to create table 'config'");
         conn.execute("CREATE TABLE IF NOT EXISTS files (id TEXT PRIMARY KEY, path TEXT, hash TEXT)", rusqlite::named_params! {}).expect("Failed to create table 'files'");
     }
 
     // 'config' subcommand
     if let Some(matches) = matches.subcommand_matches("config") {
         let new_config = Configuration {
-            client_id: option_str_string(matches.value_of("client-id")),
-            client_secret: option_str_string(matches.value_of("client-secret")),
-            input_files: option_str_string(matches.value_of("files"))
+            client_id:      option_str_string(matches.value_of("client-id")),
+            client_secret:  option_str_string(matches.value_of("client-secret")),
+            input_files:    option_str_string(matches.value_of("files")),
+            drive_id:       option_str_string(matches.value_of("drive_id"))
         };
 
         let current_config = handle_err!(Configuration::get_config(&empty_env));
 
         let config = Configuration::merge(new_config, current_config);
-        println!("{:?}", &config);
         match config.is_complete() {
             (true, _) => {},
             (false, str) => {
@@ -106,6 +114,7 @@ fn main() {
         println!("Client ID: {}", option_unwrap_text(config.client_id));
         println!("Client Secret: {}", option_unwrap_text(config.client_secret));
         println!("Input Files: {}", option_unwrap_text(config.input_files));
+        println!("Drive ID: {}", option_unwrap_text(config.drive_id));
         std::process::exit(0);
     }
 
@@ -127,7 +136,7 @@ fn main() {
         }
 
         // Safe to call unwrap because we've verified that the config is complete
-        let env = Env::new(config.client_id.as_ref().unwrap(), config.client_secret.as_ref().unwrap());
+        let env = Env::new(config.client_id.as_ref().unwrap(), config.client_secret.as_ref().unwrap(), config.drive_id.as_ref());
         let login_data = handle_err!(crate::login::perform_oauth2_login(&env));
 
         println!("Info: Inserting tokens into database.");
@@ -154,14 +163,18 @@ fn main() {
         }
 
         // Safe to call unwrap because we verified the config is complete above
-        let env = Env::new(config.client_id.as_ref().unwrap(), config.client_secret.as_ref().unwrap());
+        let env = Env::new(config.client_id.as_ref().unwrap(), config.client_secret.as_ref().unwrap(), config.drive_id.as_ref());
 
         let access_token = handle_err!(crate::api::oauth::get_access_token(&env));
-        let folder_id = handle_err!(crate::api::drive::create_folder(&access_token, "testfolder", "root"));
 
-        let path = std::path::Path::new("/mnt/c/Users/Tobias de Bruijn/Downloads/Spinner-1s-200px.gif");
-        let file_id = crate::api::drive::upload_file(&access_token, path, &folder_id).unwrap();
-        println!("{}", file_id);
+        let list = handle_err!(crate::api::drive::list_files(&access_token, Some("name = 'Syncer' and mimeType = 'application/vnd.google-apps.folder'"), config.drive_id.as_deref()));
+        let root_folder_id = if list.len() == 0 {
+            handle_err!(crate::api::drive::create_folder(&access_token, "Syncer", "root"))
+        } else {
+            list.get(0).unwrap().id.clone()
+        };
+
+        println!("{}", root_folder_id);
 
         std::process::exit(0);
     }

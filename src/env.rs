@@ -4,7 +4,8 @@ use cfg_if::cfg_if;
 pub struct Env {
     pub db:             String,
     pub client_id:      String,
-    pub client_secret:  String
+    pub client_secret:  String,
+    pub drive_id:       Option<String>
 }
 
 #[cfg(unix)]
@@ -14,7 +15,8 @@ const DB_PATH: &str = "%home%/.syncer/";
 const DB_PATH: &str = r#"%appdata%\syncer\"#;
 
 impl Env {
-    pub fn new(id: &str, secret: &str) -> Self {
+    pub fn new<A, B, C>(id: A, secret: B, drive_id: Option<C>) -> Self
+    where A: AsRef<str>, B: AsRef<str>, C: AsRef<str> {
         let db = get_db_path();
         if !std::path::Path::new(&db).exists() {
             std::fs::create_dir_all(std::path::Path::new(&db)).expect(&format!("Failed to create database folder at {}. ", &db));
@@ -22,8 +24,12 @@ impl Env {
 
         Self {
             db,
-            client_secret: secret.to_string(),
-            client_id: id.to_string()
+            client_secret:  secret.as_ref().to_string(),
+            client_id:      id.as_ref().to_string(),
+            drive_id:       match drive_id {
+                                Some(id) => Some(id.as_ref().to_string()),
+                                None => None
+                            }
         }
     }
 
@@ -35,8 +41,9 @@ impl Env {
 
         Self {
             db,
-            client_id: String::new(),
-            client_secret: String::new()
+            client_id:      String::new(),
+            client_secret:  String::new(),
+            drive_id:       None
         }
     }
 
