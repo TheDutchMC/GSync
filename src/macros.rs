@@ -6,7 +6,7 @@ macro_rules! unwrap_db_err {
     ($expression:expr) => {
         match $expression {
             Ok(t) => t,
-            Err(e) => return Err($crate::Error::DatabaseError(e))
+            Err(e) => return Err(($crate::Error::DatabaseError(e), std::line!(), std::file!()))
         }
     }
 }
@@ -19,7 +19,7 @@ macro_rules! unwrap_req_err {
     ($expression:expr) => {
         match $expression {
             Ok(t) => t,
-            Err(e) => return Err($crate::Error::RequestError(e))
+            Err(e) => return Err(($crate::Error::RequestError(e), std::line!(), std::file!()))
         }
     }
 }
@@ -32,7 +32,7 @@ macro_rules! unwrap_other_err {
     ($expression:expr) => {
         match $expression {
             Ok(t) => t,
-            Err(e) => return Err($crate::Error::Other(e.to_string()))
+            Err(e) => return Err(($crate::Error::Other(e.to_string()), std::line!(), std::file!()))
         }
     }
 }
@@ -47,12 +47,12 @@ macro_rules! handle_err {
     ($expression:expr) => {
         match $expression {
             Ok(t) => t,
-            Err(e) => {
+            Err((e, line, file)) => {
                 match e {
-                    $crate::Error::DatabaseError(e) => eprintln!("Error: An error occurred while processing or handling database data: {:?}", e),
-                    $crate::Error::RequestError(e) => eprintln!("Error: An error occurred while sending a HTTP request: {:?}", e),
-                    $crate::Error::GoogleError(e) => eprintln!("Error: The Google API returned an error: {:?}", e),
-                    $crate::Error::Other(e) => eprintln!("Error: An error occurred: {:?}", e)
+                    $crate::Error::DatabaseError(e) => eprintln!("Error: An error occurred while processing or handling database data: {:?} (line {} in {})", e, line, file),
+                    $crate::Error::RequestError(e) => eprintln!("Error: An error occurred while sending a HTTP request: {:?} (line {} in {})", e, line, file),
+                    $crate::Error::GoogleError(e) => eprintln!("Error: The Google API returned an error: {:?} (line {} in {})", e, line, file),
+                    $crate::Error::Other(e) => eprintln!("Error: An error occurred: {:?} (line {} in {})", e, line, file)
                 }
 
                 eprintln!("This is a fatal error. Exiting!");
@@ -109,7 +109,7 @@ macro_rules! handle_err {
 macro_rules! unwrap_google_err {
     ($expression:expr) => {
         if $expression.error.is_some() {
-            return Err($crate::Error::GoogleError($expression.error.unwrap()));
+            return Err(($crate::Error::GoogleError($expression.error.unwrap()), std::line!(), std::file!()));
         } else {
             $expression.data.unwrap()
         }

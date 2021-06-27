@@ -80,7 +80,7 @@ impl Configuration {
                 Ok(Self { client_id, client_secret, input_files, drive_id })
             },
             Ok(None) => Ok(Self::empty()),
-            Err(e) => Err(Error::DatabaseError(e))
+            Err(e) => Err((Error::DatabaseError(e), line!(), file!()))
         }
     }
 

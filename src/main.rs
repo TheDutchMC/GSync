@@ -1,4 +1,3 @@
-#![allow(warnings)]
 
 mod api;
 mod env;
@@ -12,7 +11,7 @@ use crate::env::Env;
 use crate::config::Configuration;
 use crate::api::GoogleError;
 
-pub type Result<T> = std::result::Result<T, Error>;
+pub type Result<T> = std::result::Result<T, (Error, u32, &'static str)>;
 
 #[derive(Debug)]
 pub enum Error {
@@ -73,7 +72,7 @@ fn main() {
         let conn = empty_env.get_conn().expect("Failed to create database connection. ");
         conn.execute("CREATE TABLE IF NOT EXISTS user (id TEXT PRIMARY KEY, refresh_token TEXT, access_token TEXT, expiry INTEGER)", rusqlite::named_params! {}).expect("Failed to create table 'users'");
         conn.execute("CREATE TABLE IF NOT EXISTS config (client_id TEXT, client_secret TEXT, input_files TEXT, drive_id TEXT)", rusqlite::named_params! {}).expect("Failed to create table 'config'");
-        conn.execute("CREATE TABLE IF NOT EXISTS files (id TEXT PRIMARY KEY, path TEXT, hash TEXT)", rusqlite::named_params! {}).expect("Failed to create table 'files'");
+        conn.execute("CREATE TABLE IF NOT EXISTS files (id TEXT PRIMARY KEY, path TEXT, modification_time INTEGER, sync_include INTEGER)", rusqlite::named_params! {}).expect("Failed to create table 'files'");
     }
 
     // 'config' subcommand
@@ -86,7 +85,6 @@ fn main() {
         };
 
         let current_config = handle_err!(Configuration::get_config(&empty_env));
-
         let config = Configuration::merge(new_config, current_config);
         match config.is_complete() {
             (true, _) => {},
@@ -137,7 +135,7 @@ fn main() {
         }
 
         // Safe to call unwrap because we've verified that the config is complete
-        let env = Env::new(config.client_id.as_ref().unwrap(), config.client_secret.as_ref().unwrap(), config.drive_id.as_ref());
+        let env = Env::new(config.client_id.as_ref().unwrap(), config.client_secret.as_ref().unwrap(), config.drive_id.as_ref(), String::new());
         let login_data = handle_err!(crate::login::perform_oauth2_login(&env));
 
         println!("Info: Inserting tokens into database.");
@@ -164,24 +162,23 @@ fn main() {
         }
 
         // Safe to call unwrap because we verified the config is complete above
-        let env = Env::new(config.client_id.as_ref().unwrap(), config.client_secret.as_ref().unwrap(), config.drive_id.as_ref());
-
+        let mut env = Env::new(config.client_id.as_ref().unwrap(), config.client_secret.as_ref().unwrap(), config.drive_id.as_ref(), String::new());
         let access_token = handle_err!(crate::api::oauth::get_access_token(&env));
 
         let list = handle_err!(crate::api::drive::list_files(&access_token, Some("name = 'Syncer' and mimeType = 'application/vnd.google-apps.folder'"), config.drive_id.as_deref()));
+        println!("{:#?}", &list);
+
         let root_folder_id = if list.len() == 0 {
+            println!("Info: Root folder doesn't exist. Creating one now.");
             handle_err!(crate::api::drive::create_folder(&access_token, "Syncer", "root"))
         } else {
+            println!("Info: Root folder exists.");
             list.get(0).unwrap().id.clone()
         };
 
-        println!("{}", root_folder_id);
+        env.root_folder = root_folder_id;
 
-        let mut exclusions = Vec::new();
-        println!("{:#?}", handle_err!(crate::sync::traverse(std::path::PathBuf::from("/mnt/a/code/HaroTorch"), &mut exclusions)));
-
-        println!("Exclusions: {:?}", exclusions);
-
+        handle_err!(crate::sync::sync(&config, &env));
         std::process::exit(0);
     }
 

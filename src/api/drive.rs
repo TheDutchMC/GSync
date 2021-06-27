@@ -74,18 +74,22 @@ where P: AsRef<Path> {
         None => panic!("TODO: FILE NAME NONE")
     }.to_str().unwrap();
 
-    let mime_guess = mime_guess::from_path(&path).first().unwrap();
-    let mime = mime_guess.essence_str();
+    let mime = match mime_guess::from_path(&path).first() {
+        Some(g) => {
+            g.essence_str().to_string()
+        },
+        None => "application/octet-stream".to_string()
+    };
 
     let body = CreateFileRequestMetadata {
         name:       file_name,
         parents:    vec![parent],
         id:         &id,
-        mime_type:  mime
+        mime_type:  &mime
     };
 
     let metadata_part = unwrap_req_err!(Part::text(serde_json::to_string(&body).unwrap()).mime_str("application/json"));
-    let file_part = unwrap_req_err!(unwrap_other_err!(Part::file(path)).mime_str(mime));
+    let file_part = unwrap_req_err!(unwrap_other_err!(Part::file(path)).mime_str(&mime));
 
     let form = Form::new()
         .part("Metadata", metadata_part)
@@ -232,15 +236,19 @@ where P: AsRef<Path> {
         upload_type:            "multipart"
     };
 
-    let mime_guess = mime_guess::from_path(&path).first().unwrap();
-    let mime = mime_guess.essence_str();
+    let mime = match mime_guess::from_path(&path).first() {
+        Some(g) => {
+            g.essence_str().to_string()
+        },
+        None => "application/octet-stream".to_string()
+    };
 
     let payload = UpdateFileRequest {
-        mime_type: mime
+        mime_type: &mime
     };
 
     let metadata_part = unwrap_req_err!(Part::text(unwrap_other_err!(serde_json::to_string(&payload))).mime_str("application/json"));
-    let file_part = unwrap_req_err!(unwrap_other_err!(Part::file(&path)).mime_str(mime));
+    let file_part = unwrap_req_err!(unwrap_other_err!(Part::file(&path)).mime_str(&mime));
 
     let form = Form::new()
         .part("Metadata", metadata_part)
@@ -271,7 +279,7 @@ where P: AsRef<Path> {
 pub fn delete_file(access_token: &str, id: &str) -> Result<()> {
     let uri = format!("https://www.googleapis.com/drive/v3/files/{}?supportsAllDrives=true", id);
     let response = unwrap_req_err!(reqwest::blocking::Client::new().delete(&uri)
-        .header("Authorization", &format!("Bearerr {}", access_token))
+        .header("Authorization", &format!("Bearer {}", access_token))
         .send());
 
     let payload: GoogleResponse<()> = unwrap_req_err!(response.json());

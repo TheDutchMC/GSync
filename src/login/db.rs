@@ -11,12 +11,15 @@ pub struct UserLogin {
 impl UserLogin {
     pub fn save_to_database(login_data: &LoginData, env: &Env) -> Result<()> {
         let conn = unwrap_db_err!(env.get_conn());
-        unwrap_db_err!(conn.execute("DELETE FROM user", named_params! {}));
+
+        if login_data.refresh_token.is_some() {
+            unwrap_db_err!(conn.execute("DELETE FROM user", named_params! {}));
+        }
 
         let expiry_time = chrono::Utc::now().timestamp() + login_data.expires_in;
         unwrap_db_err!(if login_data.refresh_token.is_some() {
             conn.execute("INSERT INTO user (refresh_token, access_token, expiry) VALUES (:refresh_token, :access_token, :expiry)", named_params! {
-                ":refresh_token": &login_data.refresh_token,
+                ":refresh_token": &login_data.refresh_token.as_ref().unwrap(),
                 ":access_token": &login_data.access_token,
                 ":expiry": expiry_time
             })
