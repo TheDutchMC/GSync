@@ -1,3 +1,4 @@
+#![allow(warnings)]
 
 mod api;
 mod env;
@@ -175,6 +176,11 @@ fn main() {
         };
 
         println!("{}", root_folder_id);
+
+        let mut exclusions = Vec::new();
+        println!("{:#?}", handle_err!(crate::sync::traverse(std::path::PathBuf::from("/mnt/a/code/HaroTorch"), &mut exclusions)));
+
+        println!("Exclusions: {:?}", exclusions);
 
         std::process::exit(0);
     }
