@@ -8,6 +8,17 @@ mod macros;
 use clap::Arg;
 use crate::env::Env;
 use crate::config::Configuration;
+use crate::api::GoogleError;
+
+pub type Result<T> = std::result::Result<T, Error>;
+
+#[derive(Debug)]
+pub enum Error {
+    GoogleError(GoogleError),
+    DatabaseError(rusqlite::Error),
+    RequestError(reqwest::Error),
+    Other(String)
+}
 
 fn main() {
     let matches = clap::App::new("Syncer")
@@ -64,13 +75,7 @@ fn main() {
             input_files: option_str_string(matches.value_of("files"))
         };
 
-        let current_config = match Configuration::get_config(&empty_env) {
-            Ok(cc) => cc,
-            Err(e) => {
-                eprintln!("Error: Failed to query current configuration: {:?}", e);
-                std::process::exit(1);
-            }
-        };
+        let current_config = handle_err!(Configuration::get_config(&empty_env));
 
         let config = Configuration::merge(new_config, current_config);
         println!("{:?}", &config);
@@ -82,13 +87,7 @@ fn main() {
             }
         }
 
-        match config.write(&empty_env) {
-            Ok(_) => {},
-            Err(e) => {
-                eprintln!("Error: Failed to write new configuration: {:?}", e);
-                std::process::exit(1);
-            }
-        };
+        handle_err!(config.write(&empty_env));
 
         println!("Configuration updated!");
         std::process::exit(0);
@@ -96,13 +95,7 @@ fn main() {
 
     // 'show' subcommand
     if let Some(_) = matches.subcommand_matches("show") {
-        let config = match Configuration::get_config(&empty_env) {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("Error: Failed to query configuration: {:?}", e);
-                std::process::exit(1);
-            }
-        };
+        let config = handle_err!(Configuration::get_config(&empty_env));
 
         if config.is_empty() {
             println!("Syncer is unconfigured. Run 'syncer config -h` for more information on how to configure Syncer'");
@@ -118,13 +111,7 @@ fn main() {
 
     // 'login' subcommand
     if let Some(_) = matches.subcommand_matches("login") {
-        let config = match Configuration::get_config(&empty_env) {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("Error: Failed to query configuration: {:?}", e);
-                std::process::exit(1);
-            }
-        };
+        let config = handle_err!(Configuration::get_config(&empty_env));
 
         if config.is_empty() {
             println!("Syncer is unconfigured. Run 'syncer config -h` for more information on how to configure Syncer'");
@@ -139,38 +126,19 @@ fn main() {
             }
         }
 
+        // Safe to call unwrap because we've verified that the config is complete
         let env = Env::new(config.client_id.as_ref().unwrap(), config.client_secret.as_ref().unwrap());
-        let login_data = match crate::login::perform_oauth2_login(&env) {
-            Ok(ld) => ld,
-            Err(e) => {
-                eprintln!("Error: OAuth2 Login Flow failed: {}", e);
-                std::process::exit(1);
-            }
-        };
+        let login_data = handle_err!(crate::login::perform_oauth2_login(&env));
 
         println!("Info: Inserting tokens into database.");
-
-        match crate::login::db::UserLogin::save_to_database(&login_data, &env) {
-            Ok(_) => {},
-            Err(e) => {
-                eprintln!("Error: Failed to insert login credentials into database: {}", e);
-                std::process::exit(1);
-            }
-        }
-
+        handle_err!(crate::login::db::UserLogin::save_to_database(&login_data, &env));
         println!("Info: Login successful!");
         std::process::exit(0);
     }
 
     // 'sync' subcommand
     if let Some(_) = matches.subcommand_matches("sync") {
-        let config = match Configuration::get_config(&empty_env) {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("Error: Failed to query configuration: {:?}", e);
-                std::process::exit(1);
-            }
-        };
+        let config = handle_err!(Configuration::get_config(&empty_env));
 
         if config.is_empty() {
             println!("Syncer is unconfigured. Run 'syncer config -h` for more information on how to configure Syncer'");
@@ -185,13 +153,17 @@ fn main() {
             }
         }
 
+        // Safe to call unwrap because we verified the config is complete above
         let env = Env::new(config.client_id.as_ref().unwrap(), config.client_secret.as_ref().unwrap());
-        let access_token = crate::api::oauth::get_access_token(&env).unwrap();
-        let folder_id = crate::api::drive::create_folder(&access_token, "testfolder", "root").unwrap();
+
+        let access_token = handle_err!(crate::api::oauth::get_access_token(&env));
+        let folder_id = handle_err!(crate::api::drive::create_folder(&access_token, "testfolder", "root"));
 
         let path = std::path::Path::new("/mnt/c/Users/Tobias de Bruijn/Downloads/Spinner-1s-200px.gif");
         let file_id = crate::api::drive::upload_file(&access_token, path, &folder_id).unwrap();
         println!("{}", file_id);
+
+        std::process::exit(0);
     }
 
     println!("No command specified. Run 'syncer -h' for available commands.");

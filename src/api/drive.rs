@@ -4,8 +4,9 @@ use std::sync::{Arc, Mutex};
 use std::cell::Cell;
 use std::path::Path;
 use reqwest::blocking::multipart::{Form, Part};
-use crate::{unwrap_str, google_error};
-use crate::api::GoogleError;
+use crate::api::GoogleResponse;
+
+use crate::{Result, unwrap_req_err, unwrap_google_err, unwrap_other_err};
 
 lazy_static! {
     static ref IDS: Arc<Mutex<Cell<Vec<String>>>> = Arc::new(Mutex::new(Cell::new(Vec::new())));
@@ -20,7 +21,7 @@ struct CreateFileRequestMetadata<'a> {
     parents:    Vec<&'a str>
 }
 
-pub fn create_folder(access_token: &str, folder_name: &str, parent: &str) -> Result<String, String> {
+pub fn create_folder(access_token: &str, folder_name: &str, parent: &str) -> Result<String> {
     let id = get_id(access_token)?;
 
     let body = CreateFileRequestMetadata {
@@ -30,17 +31,16 @@ pub fn create_folder(access_token: &str, folder_name: &str, parent: &str) -> Res
         parents:    vec![parent]
     };
 
-    match reqwest::blocking::Client::new().post("https://www.googleapis.com/drive/v3/files")
+    unwrap_req_err!(reqwest::blocking::Client::new().post("https://www.googleapis.com/drive/v3/files")
         .header("Content-Type","application/json")
         .header("Authorization", &format!("Bearer {}", access_token))
         .body(serde_json::to_string(&body).unwrap())
-        .send() {
-        Ok(_) => Ok(id),
-        Err(e) => return Err(e.to_string())
-    }
+        .send());
+
+    Ok(id)
 }
 
-pub fn upload_file<P>(access_token: &str, path: P, parent: &str) -> Result<String, String>
+pub fn upload_file<P>(access_token: &str, path: P, parent: &str) -> Result<String>
 where P: AsRef<Path> {
 
     let id = get_id(access_token)?;
@@ -59,14 +59,14 @@ where P: AsRef<Path> {
         mime_type:  mime
     };
 
-    let metadata_part = unwrap_str!(Part::text(serde_json::to_string(&body).unwrap()).mime_str("application/json"));
-    let file_part = unwrap_str!(unwrap_str!(Part::file(path)).mime_str(mime));
+    let metadata_part = unwrap_other_err!(Part::text(serde_json::to_string(&body).unwrap()).mime_str("application/json"));
+    let file_part = unwrap_other_err!(unwrap_other_err!(Part::file(path)).mime_str(mime));
 
     let form = Form::new()
         .part("Metadata", metadata_part)
         .part("Media", file_part);
 
-    let rq = unwrap_str!(reqwest::blocking::Client::new().post("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart")
+    unwrap_req_err!(reqwest::blocking::Client::new().post("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart")
         .multipart(form)
         .header("Content-Type", "multipart/related")
         .header("Authorization", &format!("Bearer {}", access_token))
@@ -77,12 +77,11 @@ where P: AsRef<Path> {
 
 #[derive(Deserialize)]
 struct GetIdsResponse {
-    ids:    Option<Vec<String>>,
-    error:  Option<GoogleError>
+    ids:    Vec<String>
 }
 
-fn get_id(access_token: &str) -> Result<String, String> {
-    let mut lock = unwrap_str!(IDS.lock());
+fn get_id(access_token: &str) -> Result<String> {
+    let mut lock = unwrap_other_err!(IDS.lock());
     let vec = lock.get_mut();
     if vec.len() == 0 {
         let mut new_ids = get_ids_from_google(access_token)?;
@@ -95,12 +94,12 @@ fn get_id(access_token: &str) -> Result<String, String> {
     Ok(vec.pop().unwrap())
 }
 
-fn get_ids_from_google(access_token: &str) -> Result<Vec<String>, String> {
-    let request = unwrap_str!(reqwest::blocking::Client::new().get("https://www.googleapis.com/drive/v3/files/generateIds?count=100")
+fn get_ids_from_google(access_token: &str) -> Result<Vec<String>> {
+    let request = unwrap_req_err!(reqwest::blocking::Client::new().get("https://www.googleapis.com/drive/v3/files/generateIds?count=100")
         .header("Authorization", &format!("Bearer {}", access_token))
         .send());
 
-    let payload: GetIdsResponse = unwrap_str!(request.json());
-    let ids = google_error!(payload, ids);
-    Ok(ids)
+    let payload: GoogleResponse<GetIdsResponse> = unwrap_req_err!(request.json());
+    let ids = unwrap_google_err!(payload);
+    Ok(ids.ids)
 }

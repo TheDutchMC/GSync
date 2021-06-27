@@ -8,13 +8,15 @@ use rand::Rng;
 use std::sync::mpsc::{Sender, channel};
 use crate::api::oauth::LoginData;
 
+use crate::{Result, unwrap_other_err};
+
 #[derive(Clone, Debug)]
 pub struct ActixData {
     state:          String,
     tx:             Sender<String>
 }
 
-pub fn perform_oauth2_login(env: &Env) -> Result<LoginData, String> {
+pub fn perform_oauth2_login(env: &Env) -> Result<LoginData> {
     //Generate a code_verifier and code_challenge
     let (code_verifier, code_challenge) = generate_code();
     //Generate a state parameter
@@ -41,7 +43,7 @@ pub fn perform_oauth2_login(env: &Env) -> Result<LoginData, String> {
     std::thread::spawn(move || {
         start_actix(actix_data, port, tx_srv);
     });
-    let server = rx_srv.recv().unwrap();
+    let server = unwrap_other_err!(rx_srv.recv());
 
     let auth_uri = crate::api::oauth::create_authentication_uri(&env, &code_challenge, &state, &format!("http://localhost:{}", port));
 
@@ -49,7 +51,7 @@ pub fn perform_oauth2_login(env: &Env) -> Result<LoginData, String> {
     println!("\n{}\n", auth_uri);
 
     //Wait for the code from the HTTP endpoint
-    let code = rx_code.recv().unwrap();
+    let code = unwrap_other_err!(rx_code.recv());
 
     println!("Info: Code received. Exchanging for tokens.");
 

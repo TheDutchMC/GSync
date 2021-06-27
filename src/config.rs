@@ -1,6 +1,6 @@
 use crate::env::Env;
 use rusqlite::named_params;
-use crate::unwrap_str;
+use crate::{Result, unwrap_db_err, Error};
 
 #[derive(Debug)]
 pub struct Configuration {
@@ -55,34 +55,31 @@ impl Configuration {
         output
     }
 
-    pub fn get_config(env: &Env) -> Result<Self, String> {
-        let conn = unwrap_str!(env.get_conn());
+    pub fn get_config(env: &Env) -> Result<Self> {
+        let conn = unwrap_db_err!(env.get_conn());
 
-        let mut stmt = conn.prepare("SELECT * FROM config").unwrap();
-        let mut result = stmt.query(named_params! {}).expect("Failed to query config table");
+        let mut stmt = unwrap_db_err!(conn.prepare("SELECT * FROM config"));
+        let mut result = unwrap_db_err!(stmt.query(named_params! {}));
 
         match result.next() {
             Ok(Some(row)) => {
-                let client_id = row.get::<&str, Option<String>>("client_id").unwrap();
-                let client_secret = row.get::<&str, Option<String>>("client_secret").unwrap();
-                let input_files = row.get::<&str, Option<String>>("input_files").unwrap();
+                let client_id = unwrap_db_err!(row.get::<&str, Option<String>>("client_id"));
+                let client_secret = unwrap_db_err!(row.get::<&str, Option<String>>("client_secret"));
+                let input_files = unwrap_db_err!(row.get::<&str, Option<String>>("input_files"));
 
                 Ok(Self { client_id, client_secret, input_files})
             },
             Ok(None) => Ok(Self::empty()),
-            Err(e) => Err(e.to_string())
+            Err(e) => Err(Error::DatabaseError(e))
         }
     }
 
-    pub fn write(&self, env: &Env) -> Result<(), String> {
-        let conn = unwrap_str!(env.get_conn());
+    pub fn write(&self, env: &Env) -> Result<()> {
+        let conn = unwrap_db_err!(env.get_conn());
 
-        match conn.execute("DELETE FROM config", named_params! {}) {
-            Ok(_) => {},
-            Err(e) => return Err(e.to_string())
-        }
+        unwrap_db_err!(conn.execute("DELETE FROM config", named_params! {}));
 
-        unwrap_str!(conn.execute("INSERT INTO config (client_id, client_secret, input_files) VALUES (:client_id, :client_secret, :input_files)", named_params! {
+        unwrap_db_err!(conn.execute("INSERT INTO config (client_id, client_secret, input_files) VALUES (:client_id, :client_secret, :input_files)", named_params! {
             ":client_id": &self.client_id,
             ":client_secret": &self.client_secret,
             ":input_files": &self.input_files

@@ -1,6 +1,8 @@
 use crate::env::Env;
 use serde::{Deserialize, Serialize};
-use crate::unwrap_str;
+
+use crate::{Result, unwrap_req_err, unwrap_db_err, unwrap_google_err};
+use crate::api::GoogleResponse;
 
 pub struct LoginData {
     pub refresh_token:  Option<String>,
@@ -66,7 +68,7 @@ pub fn create_authentication_uri(env: &Env, code_challenge: &str, state: &str, r
 }
 
 
-pub fn exchange_access_token(env: &Env, access_token: &str, code_verifier: &str, redirect_uri: &str) -> Result<LoginData, String> {
+pub fn exchange_access_token(env: &Env, access_token: &str, code_verifier: &str, redirect_uri: &str) -> Result<LoginData> {
 
     //We can now exchange this token for a refresh_token and the likes
     let exchange_request = ExchangeAccessTokenRequest {
@@ -79,29 +81,30 @@ pub fn exchange_access_token(env: &Env, access_token: &str, code_verifier: &str,
     };
 
     // Send a request to Google to exchange the code for the necessary codes
-    let response = unwrap_str!(reqwest::blocking::Client::new().post("https://oauth2.googleapis.com/token")
+    let response = unwrap_req_err!(reqwest::blocking::Client::new().post("https://oauth2.googleapis.com/token")
         .body(serde_json::to_string(&exchange_request).unwrap())
         .send());
 
     // Deserialize from JSON
-    let exchange_response: ExchangeAccessTokenResponse = unwrap_str!(response.json());
+    let exchange_response: GoogleResponse<ExchangeAccessTokenResponse> = unwrap_req_err!(response.json());
+    let token_response = unwrap_google_err!(exchange_response);
 
     Ok(LoginData {
-        access_token: exchange_response.access_token,
-        refresh_token: Some(exchange_response.refresh_token),
-        expires_in: exchange_response.expires_in
+        access_token: token_response.access_token,
+        refresh_token: Some(token_response.refresh_token),
+        expires_in: token_response.expires_in
     })
 }
 
-pub fn get_access_token(env: &Env) -> Result<String, String> {
-    let conn = unwrap_str!(env.get_conn());
-    let mut stmt = unwrap_str!(conn.prepare("SELECT access_token, refresh_token, expiry FROM user"));
-    let mut result = unwrap_str!(stmt.query(rusqlite::named_params! {}));
+pub fn get_access_token(env: &Env) -> Result<String> {
+    let conn = unwrap_db_err!(env.get_conn());
+    let mut stmt = unwrap_db_err!(conn.prepare("SELECT access_token, refresh_token, expiry FROM user"));
+    let mut result = unwrap_db_err!(stmt.query(rusqlite::named_params! {}));
 
     while let Ok(Some(row)) = result.next() {
-        let access_token = unwrap_str!(row.get::<&str, String>("access_token"));
-        let refresh_token = unwrap_str!(row.get::<&str, String>("refresh_token"));
-        let expiry = unwrap_str!(row.get::<&str, i64>("expiry"));
+        let access_token = unwrap_db_err!(row.get::<&str, String>("access_token"));
+        let refresh_token = unwrap_db_err!(row.get::<&str, String>("refresh_token"));
+        let expiry = unwrap_db_err!(row.get::<&str, i64>("expiry"));
 
         if chrono::Utc::now().timestamp() > (expiry - 60) {
             // We need to manually drop these to avoid having two open connections at the same time
@@ -122,7 +125,7 @@ pub fn get_access_token(env: &Env) -> Result<String, String> {
 
 }
 
-fn refresh_access_token(env: &Env, refresh_token: &str) -> Result<LoginData, String> {
+fn refresh_access_token(env: &Env, refresh_token: &str) -> Result<LoginData> {
     let request_body = RefreshTokenRequest {
         client_id:      &env.client_id,
         client_secret:  &env.client_secret,
@@ -132,15 +135,16 @@ fn refresh_access_token(env: &Env, refresh_token: &str) -> Result<LoginData, Str
 
     //Safe to unwrap() because we know the struct can be translated to valid json
     let body = serde_json::to_string(&request_body).unwrap();
-    let request = unwrap_str!(reqwest::blocking::Client::new().post("https://oauth2.googleapis.com/token")
+    let request = unwrap_req_err!(reqwest::blocking::Client::new().post("https://oauth2.googleapis.com/token")
         .body(body)
         .send());
 
-    let response_payload: RefreshTokenResponse = unwrap_str!(request.json());
+    let response_payload: GoogleResponse<RefreshTokenResponse> = unwrap_req_err!(request.json());
+    let payload = unwrap_google_err!(response_payload);
 
     Ok(LoginData {
-        access_token: response_payload.access_token,
-        expires_in: response_payload.expires_in,
+        access_token: payload.access_token,
+        expires_in: payload.expires_in,
         refresh_token: None
     })
 }
