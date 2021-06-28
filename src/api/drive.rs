@@ -136,6 +136,9 @@ struct FileListRequest<'a> {
     /// If we support all drives, we do
     supports_all_drives:            bool,
 
+    /// Do we include items from all drives, no, we don't
+    include_items_from_all_drives:  bool,
+
     /// The fields to get
     fields:                         &'static str
 }
@@ -175,6 +178,7 @@ pub fn list_files(env: &Env, q: Option<&str>, drive_id: Option<&str>) -> Result<
         drive_id,
         corpora:                        if drive_id.is_some() { "drive" } else { "user" },
         supports_all_drives:            true,
+        include_items_from_all_drives:  false,
         fields:                         "kind,incompleteSearch,files/kind,files/modifiedTime,files/id,files/name"
     };
 
