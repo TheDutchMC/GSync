@@ -1,6 +1,6 @@
 [package]
 name = "gsync"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Tobias de Bruijn <t.debruijn@array21.dev>"]
 edition = "2018"
 repository = "https://github.com/TheDutchMC/GSync"
