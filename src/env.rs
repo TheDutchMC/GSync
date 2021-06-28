@@ -10,10 +10,10 @@ pub struct Env {
 }
 
 #[cfg(unix)]
-const DB_PATH: &str = "%home%/.syncer/";
+const DB_PATH: &str = "%home%/.gsync/";
 
 #[cfg(windows)]
-const DB_PATH: &str = r#"%appdata%\syncer\"#;
+const DB_PATH: &str = r#"%appdata%\gsync\"#;
 
 impl Env {
     pub fn new<A, B, C, D>(id: A, secret: B, drive_id: Option<C>, root_folder: D) -> Self

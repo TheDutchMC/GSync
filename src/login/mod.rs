@@ -65,7 +65,7 @@ pub fn perform_oauth2_login(env: &Env) -> Result<LoginData> {
 /// This is a blocking method call
 /// An instance of Actix's Server will be send over the provided channel so it can be stopped later
 fn start_actix(data: ActixData, port: u16, tx: Sender<actix_server::Server>)  {
-    let mut sys = actix_web::rt::System::new("Syncer");
+    let mut sys = actix_web::rt::System::new("GSync");
     let actix = match HttpServer::new(move || {
         App::new()
             .data(data.clone())

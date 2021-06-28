@@ -947,6 +947,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b919933a397b79c37e33b77bb2aa3dc8eb6e165ad809e58ff75bc7db2e34574"
 
 [[package]]
+name = "gsync"
+version = "0.1.0"
+dependencies = [
+ "actix",
+ "actix-server",
+ "actix-web",
+ "base64",
+ "cfg-if 1.0.0",
+ "chrono",
+ "clap",
+ "lazy_static",
+ "mime_guess",
+ "rand 0.8.4",
+ "reqwest",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "serde_qs",
+ "sha2",
+ "tokio 1.7.1",
+]
+
+[[package]]
 name = "h2"
 version = "0.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2255,29 +2278,6 @@ dependencies = [
  "proc-macro2",
  "quote 1.0.9",
  "unicode-xid 0.2.2",
-]
-
-[[package]]
-name = "syncer"
-version = "0.1.0"
-dependencies = [
- "actix",
- "actix-server",
- "actix-web",
- "base64",
- "cfg-if 1.0.0",
- "chrono",
- "clap",
- "lazy_static",
- "mime_guess",
- "rand 0.8.4",
- "reqwest",
- "rusqlite",
- "serde",
- "serde_json",
- "serde_qs",
- "sha2",
- "tokio 1.7.1",
 ]
 
 [[package]]

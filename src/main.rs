@@ -21,13 +21,15 @@ pub enum Error {
     Other(String)
 }
 
+const VERSION: &'static str = env!("CARGO_PKG_VERSION");
+
 fn main() {
-    let matches = clap::App::new("Syncer")
-        .version("0.1.0")
+    let matches = clap::App::new("gsync")
+        .version(VERSION)
         .author("Tobias de Bruijn <t.debruijn@array21.dev>")
         .about("Sync folders and files to Google Drive while respecting gitignore files")
         .subcommand(clap::SubCommand::with_name("config")
-            .about("Configure Syncer. Not all options have to be supplied, if you don't want to overwrite them. If this is the first time you're running the config command, you must provide all options.")
+            .about("Configure GSync. Not all options have to be supplied, if you don't want to overwrite them. If this is the first time you're running the config command, you must provide all options.")
             .arg(Arg::with_name("client-id")
                 .short("i")
                 .long("id")
@@ -57,7 +59,7 @@ fn main() {
                 .takes_value(true)
                 .required(false)))
         .subcommand(clap::SubCommand::with_name("show")
-            .about("Show the current Syncer configuration"))
+            .about("Show the current GSync configuration"))
         .subcommand(clap::SubCommand::with_name("login")
             .about("Login to Google"))
         .subcommand(clap::SubCommand::with_name("sync")
@@ -105,11 +107,11 @@ fn main() {
         let config = handle_err!(Configuration::get_config(&empty_env));
 
         if config.is_empty() {
-            println!("Syncer is unconfigured. Run 'syncer config -h` for more information on how to configure Syncer'");
+            println!("GSync is unconfigured. Run 'gsync config -h` for more information on how to configure GSync'");
             std::process::exit(0);
         }
 
-        println!("Current Syncer configuration:");
+        println!("Current GSync configuration:");
         println!("Client ID: {}", option_unwrap_text(config.client_id));
         println!("Client Secret: {}", option_unwrap_text(config.client_secret));
         println!("Input Files: {}", option_unwrap_text(config.input_files));
@@ -122,7 +124,7 @@ fn main() {
         let config = handle_err!(Configuration::get_config(&empty_env));
 
         if config.is_empty() {
-            println!("Syncer is unconfigured. Run 'syncer config -h` for more information on how to configure Syncer'");
+            println!("GSync is unconfigured. Run 'gsync config -h` for more information on how to configure GSync'");
             std::process::exit(0);
         }
 
@@ -149,7 +151,7 @@ fn main() {
         let config = handle_err!(Configuration::get_config(&empty_env));
 
         if config.is_empty() {
-            println!("Syncer is unconfigured. Run 'syncer config -h` for more information on how to configure Syncer'");
+            println!("GSync is unconfigured. Run 'gsync config -h` for more information on how to configure GSync'");
             std::process::exit(0);
         }
 
@@ -163,14 +165,13 @@ fn main() {
 
         // Safe to call unwrap because we verified the config is complete above
         let mut env = Env::new(config.client_id.as_ref().unwrap(), config.client_secret.as_ref().unwrap(), config.drive_id.as_ref(), String::new());
-        let access_token = handle_err!(crate::api::oauth::get_access_token(&env));
 
-        let list = handle_err!(crate::api::drive::list_files(&access_token, Some("name = 'Syncer' and mimeType = 'application/vnd.google-apps.folder'"), config.drive_id.as_deref()));
-        println!("{:#?}", &list);
+        println!("Info: Querying Drive for root folder");
+        let list = handle_err!(crate::api::drive::list_files(&env, Some("name = 'GSync' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"), config.drive_id.as_deref()));
 
         let root_folder_id = if list.len() == 0 {
             println!("Info: Root folder doesn't exist. Creating one now.");
-            handle_err!(crate::api::drive::create_folder(&access_token, "Syncer", "root"))
+            handle_err!(crate::api::drive::create_folder(&env, "GSync", "root"))
         } else {
             println!("Info: Root folder exists.");
             list.get(0).unwrap().id.clone()
@@ -182,7 +183,7 @@ fn main() {
         std::process::exit(0);
     }
 
-    println!("No command specified. Run 'syncer -h' for available commands.");
+    println!("No command specified. Run 'gsync -h' for available commands.");
 }
 
 fn option_str_string(i: Option<&str>) -> Option<String> {

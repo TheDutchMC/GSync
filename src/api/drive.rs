@@ -5,8 +5,10 @@ use std::cell::Cell;
 use std::path::Path;
 use reqwest::blocking::multipart::{Form, Part};
 use crate::api::GoogleResponse;
+use crate::api::oauth::get_access_token;
 
 use crate::{Result, unwrap_req_err, unwrap_google_err, unwrap_other_err};
+use crate::env::Env;
 
 lazy_static! {
     static ref IDS: Arc<Mutex<Cell<Vec<String>>>> = Arc::new(Mutex::new(Cell::new(Vec::new())));
@@ -24,15 +26,16 @@ struct CreateFileRequestMetadata<'a> {
 /// Create a folder in Google Drive, and return it's ID
 ///
 /// ## Params
-/// - `access_token` OAuth2 access token
+/// - `env` Env instance
 /// - `folder_name` The name of the folder to create
 /// - `parent` ID of parent folder
 ///
 /// ## Errors
 /// - Request failure
 /// - Google API error
-pub fn create_folder(access_token: &str, folder_name: &str, parent: &str) -> Result<String> {
-    let id = get_id(access_token)?;
+pub fn create_folder(env: &Env, folder_name: &str, parent: &str) -> Result<String> {
+    let access_token = get_access_token(env)?;
+    let id = get_id(env)?;
 
     let body = CreateFileRequestMetadata {
         name:       folder_name,
@@ -43,7 +46,7 @@ pub fn create_folder(access_token: &str, folder_name: &str, parent: &str) -> Res
 
     let response = unwrap_req_err!(reqwest::blocking::Client::new().post("https://www.googleapis.com/drive/v3/files")
         .header("Content-Type","application/json")
-        .header("Authorization", &format!("Bearer {}", access_token))
+        .header("Authorization", &format!("Bearer {}", &access_token))
         .body(serde_json::to_string(&body).unwrap())
         .send());
 
@@ -56,7 +59,7 @@ pub fn create_folder(access_token: &str, folder_name: &str, parent: &str) -> Res
 /// Upload a file to Google Drive and return it's ID
 ///
 /// ## Params
-/// - `access_token` OAuth2 access token
+/// - `env` Env instance
 /// - `path` Path to the file to be uploaded
 /// - `parent` ID of the parent folder
 ///
@@ -65,10 +68,10 @@ pub fn create_folder(access_token: &str, folder_name: &str, parent: &str) -> Res
 /// - Error from Google API
 /// - Upon failing to identify MIME type
 /// - Upon failing to identify file name
-pub fn upload_file<P>(access_token: &str, path: P, parent: &str) -> Result<String>
+pub fn upload_file<P>(env: &Env, path: P, parent: &str) -> Result<String>
 where P: AsRef<Path> {
-
-    let id = get_id(access_token)?;
+    let access_token = get_access_token(env)?;
+    let id = get_id(env)?;
     let file_name = match path.as_ref().file_name() {
         Some(f) => f.clone(),
         None => panic!("TODO: FILE NAME NONE")
@@ -98,7 +101,7 @@ where P: AsRef<Path> {
     let response = unwrap_req_err!(reqwest::blocking::Client::new().post("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart")
         .multipart(form)
         .header("Content-Type", "multipart/related")
-        .header("Authorization", &format!("Bearer {}", access_token))
+        .header("Authorization", &format!("Bearer {}", &access_token))
         .send());
 
     let payload: GoogleResponse<()> = unwrap_req_err!(response.json());
@@ -119,7 +122,9 @@ struct FileListRequest<'a> {
     corpora:                        &'static str,
 
     supports_all_drives:            bool,
-    include_items_from_all_drives:  bool
+    include_items_from_all_drives:  bool,
+
+    fields:                         &'static str
 }
 
 #[derive(Deserialize, Debug)]
@@ -128,32 +133,36 @@ struct FileListResponse {
 }
 
 #[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct File {
-    pub id:     String,
-    pub name:   String,
+    pub id:             String,
+    pub name:           String,
+    pub modified_time:  String,
 }
 
 /// List the files in Google Drive
 ///
 /// ## Params
-/// - `access_token` OAuth2 access token
+/// - `env` Env instance
 /// - `q` Search parameter, refer to [Google docs](https://developers.google.com/drive/api/v3/search-files)
 /// - `drive_id` If Team Drive, the ID of that Team Drive
 ///
 /// ## Error
 /// - Request failure
 /// - Error from Google API
-pub fn list_files(access_token: &str, q: Option<&str>, drive_id: Option<&str>) -> Result<Vec<File>> {
+pub fn list_files(env: &Env, q: Option<&str>, drive_id: Option<&str>) -> Result<Vec<File>> {
     let query_params = FileListRequest {
         q,
         drive_id,
         corpora:                        if drive_id.is_some() { "drive" } else { "user" },
         supports_all_drives:            true,
-        include_items_from_all_drives:  true
+        include_items_from_all_drives:  true,
+        fields:                         "kind,incompleteSearch,files/kind,files/modifiedTime,files/id,files/name"
     };
 
+    let access_token = get_access_token(env)?;
     let req = unwrap_req_err!(reqwest::blocking::Client::new().get(format!("https://www.googleapis.com/drive/v3/files?{}", serde_qs::to_string(&query_params).unwrap()))
-        .header("Authorization", &format!("Bearer {}", access_token))
+        .header("Authorization", &format!("Bearer {}", &access_token))
         .send());
 
     let request_payload: GoogleResponse<FileListResponse> = unwrap_req_err!(req.json());
@@ -170,16 +179,19 @@ struct GetIdsResponse {
 /// Get a File ID from the IDS Vec. If this Vec contains no more IDs, a new set will be requested from Google.
 ///
 /// ## Params
-/// - `access_token` OAuth2 access token
+/// - `env` Env instance
 ///
 /// ## Errors
 /// - Request failure
 /// - Error from Google API
-fn get_id(access_token: &str) -> Result<String> {
+fn get_id(env: &Env) -> Result<String> {
     let mut lock = unwrap_other_err!(IDS.lock());
     let vec = lock.get_mut();
+
+    let access_token = get_access_token(env)?;
+
     if vec.len() == 0 {
-        let mut new_ids = get_ids_from_google(access_token)?;
+        let mut new_ids = get_ids_from_google(&access_token)?;
         let id = new_ids.pop().unwrap();
         lock.set(new_ids);
 
@@ -220,7 +232,7 @@ struct UpdateFileRequest<'a> {
 /// Update a file in Google Drive. The caller should make sure the file exists.
 ///
 /// ## Params
-/// - `access_token` OAuth2 access token
+/// - `env` Env instance
 /// - `path` Path to the file to be updated
 /// - `id` The ID of the existing file in Google Drive to be updated
 ///
@@ -228,9 +240,9 @@ struct UpdateFileRequest<'a> {
 /// - Request failure
 /// - Google API error
 /// - Failure to construct multipart parts
-pub fn update_file<P>(access_token: &str, path: P, id: &str) -> Result<()>
+pub fn update_file<P>(env: &Env, path: P, id: &str) -> Result<()>
 where P: AsRef<Path> {
-
+    let access_token = get_access_token(env)?;
     let query = UpdateFileRequestQuery {
         supports_all_drives:    true,
         upload_type:            "multipart"
@@ -270,13 +282,14 @@ where P: AsRef<Path> {
 /// Permanently delete a file
 ///
 /// ## Params
-/// - `access_token` OAuth2 access token
+/// - `env` Env instance
 /// - `id` The ID of the existing file in Google Drive to be updated
 ///
 /// ## Errors
 /// - Request failure
 /// - Google API error
-pub fn delete_file(access_token: &str, id: &str) -> Result<()> {
+pub fn delete_file(env: &Env, id: &str) -> Result<()> {
+    let access_token = get_access_token(env)?;
     let uri = format!("https://www.googleapis.com/drive/v3/files/{}?supportsAllDrives=true", id);
     let response = unwrap_req_err!(reqwest::blocking::Client::new().delete(&uri)
         .header("Authorization", &format!("Bearer {}", access_token))

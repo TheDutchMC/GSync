@@ -1,6 +1,6 @@
 use crate::config::Configuration;
 use crate::env::Env;
-use crate::{Result, Error};
+use crate::Result;
 use cfg_if::cfg_if;
 use std::path::{Path, PathBuf};
 use std::fs;
@@ -34,118 +34,76 @@ pub fn sync(config: &Configuration, env: &Env) -> Result<()> {
 
     reset_sync_include(env)?;
     for child in children {
-        sync_child(child, env, true)?;
+        sync_child(child, env, None)?;
     }
 
-    remote_delete_removed(env)?;
+    //remote_delete_removed(env)?;
     Ok(())
 }
 
-fn sync_child(child: Child, env: &Env, at_root: bool) -> Result<()> {
+fn sync_child(child: Child, env: &Env, parent_folder_id: Option<&str>) -> Result<()> {
     match child {
         Child::Directory(dir) => {
-            let record = get_file_record(&dir.path, env)?;
-            match record {
-                Some(_) => {
-                    update_file(&dir.path, env)?;
-                },
-                None => {
-                    let parent_id = if at_root {
-                        env.root_folder.clone()
-                    } else {
-                        //Parent is always Some, because we've had to traverse it to get to the child.
-                        let (id, _) = get_file_record(&dir.path.parent().unwrap(), env)?.unwrap();
-                        id
-                    };
 
-                    //Extra check to see if the directory exists
-                    let mut id = String::new();
-                    let files = drive::list_files(env, Some(&format!("name = '{}' and mimeType = 'application/vnd.google-apps.folder'", &dir.name)), env.drive_id.as_deref())?;
-                    for file in files {
-                        if file.name.contains(&dir.name) {
-                            id = file.id;
-                        }
-                    }
+            println!("Info: Querying Drive for directory '{}'", &dir.name);
+            let query_result = match parent_folder_id {
+                Some(parent_folder_id) => drive::list_files(env, Some(&format!("name = '{}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false and '{}' in parents", &dir.name, parent_folder_id)), env.drive_id.as_deref())?,
+                None => drive::list_files(env, Some(&format!("name = '{}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false and '{}' in parents", &dir.name, &env.root_folder)), env.drive_id.as_deref())?
+            };
 
-                    if id.is_empty() {
-                        println!("Info: Creating directory '{}'", &dir.name);
-                        id = match drive::create_folder(env, &dir.name, &parent_id) {
-                            Ok(id) => id,
-                            Err(e) => {
-                                match &e.0 {
-                                    Error::GoogleError(ge) => {
-                                        if ge.code == 404 && ge.message.contains("File not found") {
-                                            //Create parent directory
-                                            match dir.path.parent() {
-                                                Some(parent) => {
-                                                    if at_root {
-                                                        drive::create_folder(env, &dir.name, "root")?
-                                                    } else {
-                                                        let record = get_file_record(parent, env)?;
-                                                        match record {
-                                                            Some((id, _)) => {
-                                                                let name = parent.file_name().unwrap().to_str().unwrap().to_string();
-                                                                drive::create_folder(env, &name, &id)?;
-                                                                drive::create_folder(env, &dir.name, &parent_id)?
-                                                            }
-                                                            None => return Err(e)
-                                                        }
-                                                    }
-
-                                                },
-                                                None => return Err(e)
-                                            }
-                                        } else {
-                                            return Err(e);
-                                        }
-                                    }
-                                    _ => return Err(e)
-                                }
-                            }
-                        };
-
-                        insert_file(&dir.path, &id, env)?;
-                    }
+            let folder_id = {
+                let mut id = String::new();
+                for file in query_result {
+                    id = file.id;
                 }
-            }
+
+                if id.is_empty() {
+                    println!("Info: Creating directory '{}'", &dir.name);
+                    id = match parent_folder_id {
+                        Some(parent_folder_id) => drive::create_folder(env, &dir.name, parent_folder_id)?,
+                        None => drive::create_folder(env, &dir.name, &env.root_folder)?
+                    };
+                }
+
+                id
+            };
 
             for child in dir.children {
-                sync_child(child, env, false)?;
+                sync_child(child, env, Some(&folder_id))?
             }
         },
-        Child::File(path) => {
-            let record = get_file_record(&path, env)?;
-            match record {
-                Some((id, mod_time)) => {
-                    let has_changed = file_changed(&path, mod_time)?;
-                    if has_changed {
-                        println!("Info: Updating file '{}'", &path.file_name().unwrap().to_str().unwrap());
-                        drive::update_file(env, &path, &id)?;
-                    }
+        Child::File(file_path) => {
+            let file_name = file_path.file_name().unwrap().to_str().unwrap();
+            println!("Info: Querying Drive for file '{}'", file_name);
 
-                    update_file(&path, env)?;
-                },
-                None => {
-                    let parent_id = if at_root {
-                        env.root_folder.clone()
+            let query_result = match parent_folder_id {
+                Some(parent_folder_id) => drive::list_files(env, Some(&format!("name = '{}' and trashed = false and '{}' in parents", file_name, parent_folder_id)), env.drive_id.as_deref())?,
+                None => drive::list_files(env, Some(&format!("name = '{}' and trashed = false and '{}' in parents", file_name, &env.root_folder)), env.drive_id.as_deref())?
+            };
+
+            match query_result.get(0) {
+                Some(file) => {
+                    let mod_time_rfc_3339 = &file.modified_time;
+                    let mod_time_epoch = unwrap_other_err!(chrono::DateTime::parse_from_rfc3339(mod_time_rfc_3339)).timestamp();
+
+                    if file_changed(&file_path, mod_time_epoch)? {
+                        println!("Info: Updating file '{}'", file_name);
+                        drive::update_file(env, &file_path, &file.id)?;
                     } else {
-                        //Parent is always Some, because we've had to traverse it to get to the child.
-                        let rec = get_file_record(path.parent().unwrap(), env)?;
-                        match rec {
-                            Some((id, _)) => id,
-                            None => {
-                                let query = drive::list_files(env, Some(&format!("name = '{}' and mimeType = 'application/vnd.google-apps.folder'", )), env.drive_id.as_deref())?;
-                            }
-                        }
+                        println!("Info: File '{}' is up-to-date.", file_name);
+                    }
+                }
+                None => {
+                    println!("Info: Uploading file '{}'", file_name);
+                    match parent_folder_id {
+                        Some(parent_folder_id) => drive::upload_file(env, &file_path, &parent_folder_id)?,
+                        None => drive::upload_file(env, &file_path, &env.root_folder)?
                     };
-
-                    println!("Info: Uploading file '{}'", &path.file_name().unwrap().to_str().unwrap());
-                    let id = drive::upload_file(env, &path, &parent_id)?;
-                    insert_file(&path, &id, env)?;
                 }
             }
         }
-    };
+    }
+
 
     Ok(())
 }

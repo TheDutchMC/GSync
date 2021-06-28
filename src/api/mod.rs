@@ -6,23 +6,23 @@ use serde::Deserialize;
 #[derive(Deserialize, Debug)]
 pub struct GoogleResponse<T> {
     #[serde(flatten)]
-    data:   Option<T>,
-    error:  Option<GoogleError>
+    pub data:   Option<T>,
+    pub error:  Option<GoogleError>
 }
 
 #[derive(Deserialize, Debug)]
 pub struct GoogleError {
-    code:       i16,
-    message:    String,
-    errors:     Vec<ErrorData>
+    pub code:       i16,
+    pub message:    String,
+    pub errors:     Vec<ErrorData>
 }
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct ErrorData {
-    domain:         String,
-    reason:         String,
-    message:        String,
-    location_type:  Option<String>,
-    location:       Option<String>
+    pub domain:         String,
+    pub reason:         String,
+    pub message:        String,
+    pub location_type:  Option<String>,
+    pub location:       Option<String>
 }
