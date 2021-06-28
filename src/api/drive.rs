@@ -178,7 +178,7 @@ pub fn list_files(env: &Env, q: Option<&str>, drive_id: Option<&str>) -> Result<
         drive_id,
         corpora:                        if drive_id.is_some() { "drive" } else { "user" },
         supports_all_drives:            true,
-        include_items_from_all_drives:  false,
+        include_items_from_all_drives:  true,
         fields:                         "kind,incompleteSearch,files/kind,files/modifiedTime,files/id,files/name"
     };
 
