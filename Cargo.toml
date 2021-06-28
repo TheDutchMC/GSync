@@ -7,7 +7,7 @@ repository = "https://github.com/TheDutchMC/GSync"
 homepage = "https://github.com/TheDutchMC/GSync"
 license = "MIT OR Apache-2.0"
 categories = ["command-line-utilities", "development-tools"]
-keywords = ["Google Drive", "Drive", "Backup", "gitignore"]
+keywords = ["Sync", "Drive", "Backup", "gitignore"]
 readme = "README.md"
 description = "GSync is a command line utility to sync your files to Google Drive, while respecting .gitignore files"
 
