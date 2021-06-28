@@ -1,14 +1,22 @@
+//! Actix web endpoint for authorization callback
+
 use actix_web::{get, web, HttpResponse, HttpRequest};
 use crate::login::ActixData;
 use serde::Deserialize;
 
+///  Struct repres
 #[derive(Deserialize)]
 struct Query {
+    /// Authorization code we can exchange for access tokens
     code:   Option<String>,
+    /// Potential errors
     error:  Option<String>,
+
+    /// State parameter which we gave to Google when creating our initial request
     state:  String
 }
 
+/// Authorization endpoint
 #[get("/")]
 pub async fn authorization(data: web::Data<ActixData>, req: HttpRequest) -> HttpResponse {
     let query: Query = match serde_qs::from_str(req.query_string()) {
@@ -16,10 +24,9 @@ pub async fn authorization(data: web::Data<ActixData>, req: HttpRequest) -> Http
         Err(e) => return HttpResponse::BadRequest().body(e.to_string())
     };
 
-    match query.error {
-        Some(e) => return HttpResponse::BadRequest().body(e),
-        None => {}
-    };
+    if let Some(e) = query.error {
+        return HttpResponse::BadRequest().body(e);
+    }
 
     let code = match query.code {
         Some(code) => code,

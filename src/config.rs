@@ -1,21 +1,33 @@
+//! Module describing user-configurable aspecs of GSync
+
 use crate::env::Env;
 use rusqlite::named_params;
 use crate::{Result, unwrap_db_err, Error};
 
+/// Struct describing a configuration for GSync
 #[derive(Debug)]
 pub struct Configuration {
+    /// Google Client ID
     pub client_id:      Option<String>,
+
+    /// Google Client secret
     pub client_secret:  Option<String>,
+
+    /// The input files to sync
     pub input_files:    Option<String>,
+
+    /// If using a Team Drive/Shared Drive, the ID of that drive
     pub drive_id:       Option<String>
 }
 
 impl Configuration {
 
+    /// Check if all fields in the current configuration are empty
     pub fn is_empty(&self) -> bool {
         self.input_files.is_none() && self.client_id.is_none() && self.client_secret.is_none() && self.drive_id.is_none()
     }
 
+    /// Create an empty configuration
     pub fn empty() -> Self {
         Self {
             client_id:      None,
@@ -25,6 +37,7 @@ impl Configuration {
         }
     }
 
+    /// Check if the current configuration is complete, i.e. all required fields are set
     pub fn is_complete(&self) -> (bool, &str) {
         // Self::drive_id is allowed to be None
 
@@ -39,6 +52,7 @@ impl Configuration {
         }
     }
 
+    /// Merge two Configurations, where `a` is seen as more important than `b`
     pub fn merge(a: Self, b: Self) -> Self {
         let mut output = Self::empty();
         match a.client_id {
@@ -64,6 +78,10 @@ impl Configuration {
         output
     }
 
+    /// Get the current configuration from the database
+    ///
+    /// ## Error
+    /// - When a database operation fails
     pub fn get_config(env: &Env) -> Result<Self> {
         let conn = unwrap_db_err!(env.get_conn());
 
@@ -84,6 +102,10 @@ impl Configuration {
         }
     }
 
+    /// Write the current configuration to the database
+    ///
+    /// ## Error
+    /// - When a database operation fails
     pub fn write(&self, env: &Env) -> Result<()> {
         let conn = unwrap_db_err!(env.get_conn());
 

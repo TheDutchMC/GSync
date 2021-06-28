@@ -1,57 +1,111 @@
+//! Google OAuth2 API
+
 use crate::env::Env;
 use serde::{Deserialize, Serialize};
 
 use crate::{Result, unwrap_req_err, unwrap_db_err, unwrap_google_err};
 use crate::api::GoogleResponse;
 
+/// Login Data
 pub struct LoginData {
+    /// Refresh token
     pub refresh_token:  Option<String>,
+
+    /// Access token
     pub access_token:   String,
+
+    /// Seconds until the refresh token expires
     pub expires_in:     i64
 }
 
+/// Struct describing the request to exchange an access code for an access token
 #[derive(Serialize)]
 struct ExchangeAccessTokenRequest<'a> {
+    /// The application's client ID
     client_id:          &'a str,
+
+    /// The application's client secret
     client_secret:      &'a str,
+
+    /// The access code
     code:               &'a str,
+
+    /// The verifier halve of the code challenge
     code_verifier:      &'a str,
+
+    /// The grant type
     grant_type:         &'static str,
+
+    /// The original redirect URI
     redirect_uri:       &'a str
 }
 
+/// Struct describing the response to an access token exchange request
 #[derive(Deserialize)]
 struct ExchangeAccessTokenResponse {
+    /// The access token
     access_token:   String,
+
+    /// Seconds until the access token expires
     expires_in:     i64,
+
+    /// The refresh token used to refresh the access token
     refresh_token:  String,
 }
 
+/// Struct describing an authentication request
 #[derive(Serialize)]
 struct AuthenticationRequest<'a> {
+    /// Application's client ID
     client_id:              &'a str,
+
+    /// The original redirect URI
     redirect_uri:           &'a str,
+
+    /// The response type
     response_type:          &'static str,
+
+    /// The scopes requested
     scope:                  &'static str,
+
+    /// The challenge halve of the code challenge
     code_challenge:         &'a str,
+
+    /// The method of code challenge
     code_challenge_method:  &'static str,
+
+    /// State parameter
     state:                  &'a str,
 }
 
+/// Struct describing the request to refresh an access token
 #[derive(Serialize)]
 struct RefreshTokenRequest<'a> {
+    /// Application's client ID
     client_id:      &'a str,
+
+    /// Application's Client Secret
     client_secret:  &'a str,
+
+    /// The type of grant
     grant_type:     &'static str,
+
+    /// The refresh token
     refresh_token:  &'a str
 }
 
+
+/// Struct describing the response for refreshing an access token
 #[derive(Deserialize)]
 struct RefreshTokenResponse {
+    /// The new access token
     access_token:   String,
+
+    /// Seconds until the token expires
     expires_in:     i64,
 }
 
+/// Create an authentication URL used for step 1 in the OAuth2 flow
 pub fn create_authentication_uri(env: &Env, code_challenge: &str, state: &str, redirect_uri: &str) -> String {
     let auth_request = AuthenticationRequest {
         client_id:              &env.client_id,
@@ -68,6 +122,11 @@ pub fn create_authentication_uri(env: &Env, code_challenge: &str, state: &str, r
 }
 
 
+/// Exchange an access code for an access token
+///
+/// ## Errors
+/// - Google API error
+/// - Reqwest error
 pub fn exchange_access_token(env: &Env, access_token: &str, code_verifier: &str, redirect_uri: &str) -> Result<LoginData> {
 
     //We can now exchange this token for a refresh_token and the likes
@@ -96,12 +155,18 @@ pub fn exchange_access_token(env: &Env, access_token: &str, code_verifier: &str,
     })
 }
 
+/// Get an access token
+///
+/// ## Errors
+/// - When a database error occurs
+/// - When the Google API returns an error
+/// - When reqwest returns an error
 pub fn get_access_token(env: &Env) -> Result<String> {
     let conn = unwrap_db_err!(env.get_conn());
     let mut stmt = unwrap_db_err!(conn.prepare("SELECT access_token, refresh_token, expiry FROM user"));
     let mut result = unwrap_db_err!(stmt.query(rusqlite::named_params! {}));
 
-    while let Ok(Some(row)) = result.next() {
+    if let Ok(Some(row)) = result.next() {
         let access_token = unwrap_db_err!(row.get::<&str, String>("access_token"));
         let refresh_token = unwrap_db_err!(row.get::<&str, String>("refresh_token"));
         let expiry = unwrap_db_err!(row.get::<&str, i64>("expiry"));
@@ -113,7 +178,7 @@ pub fn get_access_token(env: &Env) -> Result<String> {
             drop(stmt);
             drop(conn);
             let new_token = refresh_access_token(env, &refresh_token)?;
-            crate::login::db::UserLogin::save_to_database(&new_token, env)?;
+            crate::login::db::save_to_database(&new_token, env)?;
 
             return Ok(new_token.access_token);
         }
@@ -125,6 +190,11 @@ pub fn get_access_token(env: &Env) -> Result<String> {
 
 }
 
+/// Refresh an OAuth2 access token using a refresh token
+///
+/// ## Errors
+/// - When the Google API returns an error
+/// - When reqwest returns an error
 fn refresh_access_token(env: &Env, refresh_token: &str) -> Result<LoginData> {
     let request_body = RefreshTokenRequest {
         client_id:      &env.client_id,

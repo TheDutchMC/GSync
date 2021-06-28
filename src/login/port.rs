@@ -1,13 +1,16 @@
+//! Module for testing ports
+
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6, TcpListener, ToSocketAddrs, UdpSocket};
 
+/// Alias for a u16
 pub type Port = u16;
 
-// Try to bind to a socket using UDP
+/// Try to bind to a socket using UDP
 fn test_bind_udp<A: ToSocketAddrs>(addr: A) -> Option<Port> {
     Some(UdpSocket::bind(addr).ok()?.local_addr().ok()?.port())
 }
 
-// Try to bind to a socket using TCP
+/// Try to bind to a socket using TCP
 fn test_bind_tcp<A: ToSocketAddrs>(addr: A) -> Option<Port> {
     Some(TcpListener::bind(addr).ok()?.local_addr().ok()?.port())
 }

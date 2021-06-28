@@ -1,4 +1,18 @@
 
+#![deny(deprecated)]
+#![deny(clippy::panic)]
+
+#![warn(rust_2018_idioms)]
+#![warn(clippy::cargo)]
+#![warn(clippy::decimal_literal_representation)]
+#![warn(clippy::if_not_else)]
+#![warn(clippy::large_digit_groups)]
+#![warn(clippy::missing_docs_in_private_items)]
+#![warn(clippy::missing_errors_doc)]
+#![warn(clippy::needless_continue)]
+
+#![allow(clippy::multiple_crate_versions)]
+
 mod api;
 mod env;
 mod config;
@@ -11,17 +25,27 @@ use crate::env::Env;
 use crate::config::Configuration;
 use crate::api::GoogleError;
 
+/// Type alias for Result
 pub type Result<T> = std::result::Result<T, (Error, u32, &'static str)>;
 
+/// Enum describing Errors which can often occur in Gsync
 #[derive(Debug)]
 pub enum Error {
+    /// Error returned by the Google API
     GoogleError(GoogleError),
+
+    /// Error resulting from a database operation
     DatabaseError(rusqlite::Error),
+
+    /// Error resulting from a reqwest operation
     RequestError(reqwest::Error),
+
+    /// An error which does not fit in any other category
     Other(String)
 }
 
-const VERSION: &'static str = env!("CARGO_PKG_VERSION");
+/// Version of the binary. Set in Cargo.toml
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn main() {
     let matches = clap::App::new("gsync")
@@ -64,6 +88,8 @@ fn main() {
             .about("Login to Google"))
         .subcommand(clap::SubCommand::with_name("sync")
             .about("Start syncing the configured folders to Google Drive"))
+        .subcommand(clap::SubCommand::with_name("drives")
+            .about("Get a list of all shared drives and their IDs."))
         .get_matches();
 
     let empty_env = Env::empty();
@@ -74,7 +100,6 @@ fn main() {
         let conn = empty_env.get_conn().expect("Failed to create database connection. ");
         conn.execute("CREATE TABLE IF NOT EXISTS user (id TEXT PRIMARY KEY, refresh_token TEXT, access_token TEXT, expiry INTEGER)", rusqlite::named_params! {}).expect("Failed to create table 'users'");
         conn.execute("CREATE TABLE IF NOT EXISTS config (client_id TEXT, client_secret TEXT, input_files TEXT, drive_id TEXT)", rusqlite::named_params! {}).expect("Failed to create table 'config'");
-        conn.execute("CREATE TABLE IF NOT EXISTS files (id TEXT PRIMARY KEY, path TEXT, modification_time INTEGER, sync_include INTEGER)", rusqlite::named_params! {}).expect("Failed to create table 'files'");
     }
 
     // 'config' subcommand
@@ -103,7 +128,7 @@ fn main() {
     }
 
     // 'show' subcommand
-    if let Some(_) = matches.subcommand_matches("show") {
+    if matches.subcommand_matches("show").is_some() {
         let config = handle_err!(Configuration::get_config(&empty_env));
 
         if config.is_empty() {
@@ -120,7 +145,7 @@ fn main() {
     }
 
     // 'login' subcommand
-    if let Some(_) = matches.subcommand_matches("login") {
+    if matches.subcommand_matches("login").is_some() {
         let config = handle_err!(Configuration::get_config(&empty_env));
 
         if config.is_empty() {
@@ -141,13 +166,13 @@ fn main() {
         let login_data = handle_err!(crate::login::perform_oauth2_login(&env));
 
         println!("Info: Inserting tokens into database.");
-        handle_err!(crate::login::db::UserLogin::save_to_database(&login_data, &env));
+        handle_err!(crate::login::db::save_to_database(&login_data, &env));
         println!("Info: Login successful!");
         std::process::exit(0);
     }
 
     // 'sync' subcommand
-    if let Some(_) = matches.subcommand_matches("sync") {
+    if matches.subcommand_matches("sync").is_some() {
         let config = handle_err!(Configuration::get_config(&empty_env));
 
         if config.is_empty() {
@@ -163,15 +188,23 @@ fn main() {
             }
         }
 
+        if !handle_err!(is_logged_in(&empty_env)) {
+            eprintln!("Error: GSync isn't logged in with Google. Have you run `gsync login` yet?");
+            std::process::exit(1);
+        }
+
         // Safe to call unwrap because we verified the config is complete above
         let mut env = Env::new(config.client_id.as_ref().unwrap(), config.client_secret.as_ref().unwrap(), config.drive_id.as_ref(), String::new());
 
         println!("Info: Querying Drive for root folder");
         let list = handle_err!(crate::api::drive::list_files(&env, Some("name = 'GSync' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"), config.drive_id.as_deref()));
 
-        let root_folder_id = if list.len() == 0 {
+        let root_folder_id = if list.is_empty() {
             println!("Info: Root folder doesn't exist. Creating one now.");
-            handle_err!(crate::api::drive::create_folder(&env, "GSync", "root"))
+            match &env.drive_id {
+                Some(drive_id) => handle_err!(crate::api::drive::create_folder(&env, "GSync", drive_id)),
+                None => handle_err!(crate::api::drive::create_folder(&env, "GSync", "root"))
+            }
         } else {
             println!("Info: Root folder exists.");
             list.get(0).unwrap().id.clone()
@@ -183,19 +216,65 @@ fn main() {
         std::process::exit(0);
     }
 
+    if matches.subcommand_matches("drives").is_some() {
+        let config = handle_err!(Configuration::get_config(&empty_env));
+
+        if config.is_empty() {
+            println!("GSync is unconfigured. Run 'gsync config -h` for more information on how to configure GSync'");
+            std::process::exit(0);
+        }
+
+        match config.is_complete() {
+            (true, _) => {},
+            (false, str) => {
+                eprintln!("Error: Configuration is incomplete; {}", str);
+                std::process::exit(1);
+            }
+        }
+
+        if !handle_err!(is_logged_in(&empty_env)) {
+            eprintln!("Error: GSync isn't logged in with Google. Have you run `gsync login` yet?");
+            std::process::exit(1);
+        }
+
+        let env = Env::new(config.client_id.as_ref().unwrap(), config.client_secret.as_ref().unwrap(), config.drive_id.as_ref(), String::new());
+        let shared_drives = handle_err!(crate::api::drive::get_shared_drives(&env));
+        for drive in shared_drives {
+            println!("Shared drive '{}' with identifier '{}'", &drive.name, &drive.id);
+        }
+
+        std::process::exit(0);
+    }
+
     println!("No command specified. Run 'gsync -h' for available commands.");
 }
 
+/// Convert a Option<&str> to an Option<String>
 fn option_str_string(i: Option<&str>) -> Option<String> {
-    match i {
-        Some(i) => Some(i.to_string()),
-        None => None
-    }
+    i.map(|i| i.to_string())
 }
 
+/// Unwrap an Option<String> to a String. If the input is None, you'll get back the literal `None`
 fn option_unwrap_text(i: Option<String>) -> String {
     match i {
         Some(i) => i,
         None => "None".to_string()
     }
+}
+
+/// Check if a user is logged in
+///
+/// # Errors
+/// - When a database operation fails
+fn is_logged_in(env: &Env) -> Result<bool> {
+    let conn = unwrap_db_err!(env.get_conn());
+    let mut stmt = unwrap_db_err!(conn.prepare("SELECT * FROM user"));
+    let mut result = unwrap_db_err!(stmt.query(rusqlite::named_params! {}));
+
+    let mut is_logged_in = false;
+    while let Ok(Some(_)) = result.next() {
+        is_logged_in = true;
+    }
+
+    Ok(is_logged_in)
 }

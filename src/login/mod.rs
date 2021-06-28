@@ -1,3 +1,5 @@
+//! Module with everything related to the OAuth2 login flow
+
 mod port;
 mod callback_endpoint;
 pub mod db;
@@ -10,12 +12,17 @@ use crate::api::oauth::LoginData;
 
 use crate::{Result, unwrap_other_err};
 
+/// Struct describing the data to be passed to Actix endpoints
 #[derive(Clone, Debug)]
 pub struct ActixData {
+    /// The state parameter. Refer to the Google OAuth2 docs for why this is used
     state:          String,
+
+    /// THe channel on which the endpoint can send the received code
     tx:             Sender<String>
 }
 
+/// Perform the OAuth2 login flow
 pub fn perform_oauth2_login(env: &Env) -> Result<LoginData> {
     //Generate a code_verifier and code_challenge
     let (code_verifier, code_challenge) = generate_code();
@@ -41,7 +48,13 @@ pub fn perform_oauth2_login(env: &Env) -> Result<LoginData> {
 
     //Start the actix web server and wait for it to return us the Server instance
     std::thread::spawn(move || {
-        start_actix(actix_data, port, tx_srv);
+        match start_actix(actix_data, port, tx_srv) {
+            Ok(_) => {},
+            Err(e) => {
+                eprintln!("Error: Failed to start Actix Web Server: {:?}", e);
+                std::process::exit(1);
+            }
+        }
     });
     let server = unwrap_other_err!(rx_srv.recv());
 
@@ -64,19 +77,18 @@ pub fn perform_oauth2_login(env: &Env) -> Result<LoginData> {
 /// Start the Actix Web Server.
 /// This is a blocking method call
 /// An instance of Actix's Server will be send over the provided channel so it can be stopped later
-fn start_actix(data: ActixData, port: u16, tx: Sender<actix_server::Server>)  {
+fn start_actix(data: ActixData, port: u16, tx: Sender<actix_server::Server>) -> Result<()> {
     let mut sys = actix_web::rt::System::new("GSync");
-    let actix = match HttpServer::new(move || {
+    let actix = unwrap_other_err!(HttpServer::new(move || {
         App::new()
             .data(data.clone())
             .service(callback_endpoint::authorization)
-    }).bind(format!("0.0.0.0:{}", port)) {
-        Ok(s) => s,
-        Err(e) => panic!("{:?}", e)
-    }.run();
+    }).bind(format!("0.0.0.0:{}", port))).run();
 
     let _ = tx.send(actix.clone());
     let _ = sys.block_on(actix);
+
+    Ok(())
 }
 
 /// Generate a code_verifier and code_challenge
@@ -92,7 +104,7 @@ fn generate_code() -> (String, String) {
             base64::encode(digest.as_slice())
         };
 
-        if code_challenge.contains("+") || code_challenge.contains("/") {
+        if code_challenge.contains('+') || code_challenge.contains('/') {
             continue;
         }
 

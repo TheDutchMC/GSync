@@ -1,18 +1,20 @@
+//! Module related to syncing files
+
 use crate::config::Configuration;
 use crate::env::Env;
 use crate::Result;
 use cfg_if::cfg_if;
 use std::path::{Path, PathBuf};
 use std::fs;
-use crate::{unwrap_other_err, unwrap_db_err};
+use crate::unwrap_other_err;
 use crate::api::drive;
-use rusqlite::named_params;
 use std::time::SystemTime;
 
+/// Sync the configured input files to google drive
 pub fn sync(config: &Configuration, env: &Env) -> Result<()> {
     // Unwrap is safe because the caller verifiers the configuration
     let input = config.input_files.as_ref().unwrap();
-    let input_parts = input.split(",").map(|f| normalize_path(f)).map(|f| PathBuf::from(f)).collect::<Vec<PathBuf>>();
+    let input_parts = input.split(',').map(|f| normalize_path(f)).map(PathBuf::from).collect::<Vec<PathBuf>>();
 
     let mut children = Vec::new();
     for input in input_parts {
@@ -32,15 +34,27 @@ pub fn sync(config: &Configuration, env: &Env) -> Result<()> {
 
     println!("Info: All directories traversed. Beginning sync now.");
 
-    reset_sync_include(env)?;
     for child in children {
         sync_child(child, env, None)?;
     }
 
-    //remote_delete_removed(env)?;
     Ok(())
 }
 
+/// Delete a file from Google Drive if it no longer exists locally
+fn delete_if_removed(path: &Path, parent_id: &str, env: &Env) -> Result<()> {
+    if !path.exists() {
+        let name = path.file_name().unwrap().to_str().unwrap();
+        let file_list  = drive::list_files(env, Some(&format!("name = '{}' and '{}' in parents", name, parent_id)), env.drive_id.as_deref())?;
+        for file in file_list {
+            drive::delete_file(env, &file.id)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Sync a child with Google Drive. This is a recursive function
 fn sync_child(child: Child, env: &Env, parent_folder_id: Option<&str>) -> Result<()> {
     match child {
         Child::Directory(dir) => {
@@ -60,13 +74,18 @@ fn sync_child(child: Child, env: &Env, parent_folder_id: Option<&str>) -> Result
                 if id.is_empty() {
                     println!("Info: Creating directory '{}'", &dir.name);
                     id = match parent_folder_id {
-                        Some(parent_folder_id) => drive::create_folder(env, &dir.name, parent_folder_id)?,
+                        Some(pfi) => drive::create_folder(env, &dir.name, pfi)?,
                         None => drive::create_folder(env, &dir.name, &env.root_folder)?
-                    };
+                    }
                 }
 
                 id
             };
+
+            match parent_folder_id {
+                Some(pfi) => delete_if_removed(&dir.path, pfi, env)?,
+                None => delete_if_removed(&dir.path, &env.root_folder, env)?
+            }
 
             for child in dir.children {
                 sync_child(child, env, Some(&folder_id))?
@@ -96,7 +115,7 @@ fn sync_child(child: Child, env: &Env, parent_folder_id: Option<&str>) -> Result
                 None => {
                     println!("Info: Uploading file '{}'", file_name);
                     match parent_folder_id {
-                        Some(parent_folder_id) => drive::upload_file(env, &file_path, &parent_folder_id)?,
+                        Some(pfi) => drive::upload_file(env, &file_path, pfi)?,
                         None => drive::upload_file(env, &file_path, &env.root_folder)?
                     };
                 }
@@ -104,67 +123,13 @@ fn sync_child(child: Child, env: &Env, parent_folder_id: Option<&str>) -> Result
         }
     }
 
-
     Ok(())
 }
 
-fn remote_delete_removed(env: &Env) -> Result<()> {
-    let conn = unwrap_db_err!(env.get_conn());
-    let mut stmt = unwrap_db_err!(conn.prepare("SELECT path,id FROM files WHERE sync_include = 0"));
-    let mut result = unwrap_db_err!(stmt.query(named_params! {}));
-    while let Ok(Some(row)) = result.next() {
-        let id = unwrap_db_err!(row.get::<&str, String>("id"));
-        let path_base64 = unwrap_db_err!(row.get::<&str, String>("path"));
-        let path = unwrap_other_err!(String::from_utf8(unwrap_other_err!(base64::decode(path_base64.as_bytes()))));
-
-        println!("Info: Deleting remote file '{}'", path);
-        drive::delete_file(env, &id)?;
-    }
-
-    unwrap_db_err!(conn.execute("DELETE FROM files WHERE sync_include = `false`", named_params! {}));
-
-    Ok(())
-}
-
-fn update_file(path: &Path, env: &Env) -> Result<()> {
-    let modification_time = get_modification_time(path)?;
-    let path_str = path.to_str().unwrap();
-    let base64_path = base64::encode(path_str.as_bytes());
-
-    let conn = unwrap_db_err!(env.get_conn());
-    let mut stmt = unwrap_db_err!(conn.prepare("UPDATE files SET modification_time = :mod_time, sync_include = 1 WHERE path = :path"));
-    unwrap_db_err!(stmt.execute(named_params! {
-        ":mod_time": (modification_time as i64),
-        ":path": &base64_path
-    }));
-
-    Ok(())
-}
-
-fn insert_file(path: &Path, id: &str, env: &Env) -> Result<()> {
-    let mod_time = get_modification_time(path)?;
-    let path_str = path.to_str().unwrap();
-    let path_str = if path_str.ends_with("/") {
-        let mut chars = path_str.chars();
-        chars.next_back();
-        chars.as_str()
-    } else {
-        path_str
-    };
-
-    let base64_path = base64::encode(path_str.as_bytes());
-
-    let conn = unwrap_db_err!(env.get_conn());
-    let mut stmt = unwrap_db_err!(conn.prepare("INSERT INTO files (id, path, modification_time, sync_include) VALUES (:id, :path, :mod_time, 1)"));
-    unwrap_db_err!(stmt.execute(named_params! {
-        ":id": id,
-        ":path": base64_path,
-        ":mod_time": (mod_time as i64)
-    }));
-
-    Ok(())
-}
-
+/// Get the modification time of a file
+///
+/// # Errors
+/// - When the underlying IO operation to fetch the modification time fails
 fn get_modification_time(path: &Path) -> Result<u64> {
     let meta = unwrap_other_err!(path.metadata());
     let meta_modified = unwrap_other_err!(meta.modified());
@@ -173,6 +138,10 @@ fn get_modification_time(path: &Path) -> Result<u64> {
     Ok(as_epoch)
 }
 
+/// Check if a file has changed by their modification time
+///
+/// # Errors
+/// - When the underlying IO operation to fetch the modification time fails
 fn file_changed(path: &Path, stored_modification_time: i64) -> Result<bool> {
     let modification_time = get_modification_time(path)?;
     if modification_time > (stored_modification_time as u64) {
@@ -182,47 +151,31 @@ fn file_changed(path: &Path, stored_modification_time: i64) -> Result<bool> {
     }
 }
 
-fn reset_sync_include(env: &Env) -> Result<()> {
-    let conn = unwrap_db_err!(env.get_conn());
-    unwrap_db_err!(conn.execute("UPDATE files SET sync_include = 0", named_params! {}));
-
-    Ok(())
-}
-
-fn get_file_record(path: &Path, env: &Env) -> Result<Option<(String, i64)>> {
-    let conn = unwrap_db_err!(env.get_conn());
-    let path_str = path.to_str().unwrap();
-    let base64_path = base64::encode(path_str.as_bytes());
-
-    let mut stmt = unwrap_db_err!(conn.prepare("SELECT id,modification_time FROM files WHERE path = :path"));
-    let mut result = unwrap_db_err!(stmt.query(named_params! {
-        ":path": &base64_path
-    }));
-
-    while let Ok(Some(row)) = result.next() {
-        let id = unwrap_db_err!(row.get::<&str, String>("id"));
-        let modification_time = unwrap_db_err!(row.get::<&str, i64>("modification_time"));
-
-        return Ok(Some((id, modification_time)));
-    }
-
-    Ok(None)
-}
-
+/// Struct describing a Directory
 #[derive(Debug)]
 pub struct Directory {
+    /// The name of the directory
     name:       String,
+
+    /// The path to the directory
     path:       PathBuf,
+
+    /// A vector of Child's that this directory is the parent of
     children:   Vec<Child>
 }
 
+/// Enum describing a Child
 #[derive(Debug)]
 pub enum Child {
+    /// Directory
     Directory(Directory),
+
+    /// File
     File(PathBuf)
 }
 
 impl Child {
+    /// Cound all Child elements to this Child
     fn count_all_children(&self) -> i64 {
         match self {
             Self::File(_) => 1,
@@ -238,6 +191,7 @@ impl Child {
     }
 }
 
+/// Traverse a path to map them to a Vec of Child
 pub fn traverse(p: PathBuf, exclusions: &mut Vec<PathBuf>) -> Result<Vec<Child>> {
     let mut top_children = Vec::new();
 
@@ -273,16 +227,17 @@ pub fn traverse(p: PathBuf, exclusions: &mut Vec<PathBuf>) -> Result<Vec<Child>>
     Ok(top_children)
 }
 
+/// Parse a gitignore file, returns a Vec<PathBuf> to be ignored
 fn parse_gitignore(p: &Path) -> Vec<PathBuf> {
     let mut exclusions = Vec::new();
 
     let contents = fs::read_to_string(&p).unwrap();
     for line in contents.lines() {
         if line.is_empty() { continue }
-        if line.starts_with("#") { continue }
+        if line.starts_with('#') { continue }
 
         let mut line_fmt = line.to_string();
-        if line.starts_with("/") { line_fmt = line.replacen("/", "", 1)}
+        if line.starts_with('/') { line_fmt = line.replacen("/", "", 1)}
         line_fmt = format!("{}/{}", p.parent().unwrap().to_str().unwrap(), line_fmt);
 
         exclusions.push(PathBuf::from(line_fmt));
@@ -291,11 +246,15 @@ fn parse_gitignore(p: &Path) -> Vec<PathBuf> {
     exclusions
 }
 
+/// Normalize a path. Meaning a relative path will be turned into an absolute one.
 fn normalize_path(i: &str) -> String {
+    // Clippy is a bit odd here, so we'll just allow it
+    #![allow(clippy::if_not_else)]
+
     let pwd = pwd();
-    if i.starts_with(".") {
+    if i.starts_with('.') {
         format!("{}{}", pwd, i)
-    } else if !i.starts_with("/"){
+    } else if !i.starts_with('/') {
         format!("{}/{}", pwd, i)
     } else {
         i.to_string()
@@ -304,16 +263,17 @@ fn normalize_path(i: &str) -> String {
 
 cfg_if! {
     if #[cfg(unix)] {
+        /// Get the current working directory
         fn pwd() -> String {
-            let pwd = std::env::var("PWD").unwrap();
-            pwd
+            std::env::var("PWD").unwrap()
         }
     } else if #[cfg(windows)] {
+        /// Get the current working directory
         fn pwd() -> String {
-            let pwd = std::env::var("cd").unwrap();
-            pwd
+            std::env::var("cd").unwrap()
         }
     } else {
+        /// Get the current working directory
         fn pwd() -> String {
             panic!("Unsupported platform!");
         }

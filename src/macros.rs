@@ -1,3 +1,5 @@
+//! Module with various macros to make code less verbose
+
 /// Macro for handling errors returned from the `rusqlite` crate
 ///
 /// The argument of this macro invoication should be a `Result<T, rusqlite::Error>`
