@@ -333,7 +333,7 @@ where P: AsRef<Path> {
     let response = unwrap_req_err!(reqwest::blocking::Client::new().patch(&uri)
         .multipart(form)
         .header("Content-Type", "multipart/related")
-        .header("Authorization", &format!("Bearerr {}", access_token))
+        .header("Authorization", &format!("Bearer {}", access_token))
         .send());
 
     let payload: GoogleResponse<()> = unwrap_req_err!(response.json());

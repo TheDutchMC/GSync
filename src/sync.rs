@@ -3,7 +3,6 @@
 use crate::config::Configuration;
 use crate::env::Env;
 use crate::Result;
-use cfg_if::cfg_if;
 use std::path::{Path, PathBuf};
 use std::fs;
 use crate::unwrap_other_err;
@@ -14,7 +13,7 @@ use std::time::SystemTime;
 pub fn sync(config: &Configuration, env: &Env) -> Result<()> {
     // Unwrap is safe because the caller verifiers the configuration
     let input = config.input_files.as_ref().unwrap();
-    let input_parts = input.split(',').map(|f| normalize_path(f)).map(PathBuf::from).collect::<Vec<PathBuf>>();
+    let input_parts = input.split(',').map(|f| normalize_path(f).unwrap()).collect::<Vec<PathBuf>>();
 
     let mut children = Vec::new();
     for input in input_parts {
@@ -198,6 +197,10 @@ pub fn traverse(p: PathBuf, exclusions: &mut Vec<PathBuf>) -> Result<Vec<Child>>
     println!("Info: Traversing '{}'", p.to_str().unwrap());
 
     if p.is_dir() {
+        if p.file_name().unwrap().eq(".git") {
+           return Ok(vec![]);
+        }
+
         let mut potential_gitignore = PathBuf::from(&p);
         potential_gitignore.push(".gitignore");
         if potential_gitignore.exists() {
@@ -238,46 +241,19 @@ fn parse_gitignore(p: &Path) -> Vec<PathBuf> {
 
         let mut line_fmt = line.to_string();
         if line.starts_with('/') { line_fmt = line.replacen("/", "", 1)}
-        line_fmt = format!("{}/{}", p.parent().unwrap().to_str().unwrap(), line_fmt);
+        if line.ends_with('/') { line_fmt = line_fmt[..line_fmt.len() - 1].to_string()};
+        let pathbuf = PathBuf::from(p.parent().unwrap()).join(line_fmt);
 
-        exclusions.push(PathBuf::from(line_fmt));
+        exclusions.push(pathbuf);
     }
 
     exclusions
 }
 
 /// Normalize a path. Meaning a relative path will be turned into an absolute one.
-fn normalize_path(i: &str) -> String {
-    // Clippy is a bit odd here, so we'll just allow it
-    #![allow(clippy::if_not_else)]
-
-    let pwd = pwd();
-    if i.starts_with('.') {
-        format!("{}{}", pwd, i)
-    } else if !i.starts_with('/') {
-        format!("{}/{}", pwd, i)
-    } else {
-        i.to_string()
-    }
-}
-
-cfg_if! {
-    if #[cfg(unix)] {
-        /// Get the current working directory
-        fn pwd() -> String {
-            std::env::var("PWD").unwrap()
-        }
-    } else if #[cfg(windows)] {
-        /// Get the current working directory
-        fn pwd() -> String {
-            std::env::var("cd").unwrap()
-        }
-    } else {
-        /// Get the current working directory
-        fn pwd() -> String {
-            panic!("Unsupported platform!");
-        }
-    }
+fn normalize_path(i: &str) -> anyhow::Result<PathBuf> {
+    let npath = std::fs::canonicalize(i)?;
+    Ok(npath)
 }
 
 #[cfg(test)]
